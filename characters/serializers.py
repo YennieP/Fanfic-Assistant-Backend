@@ -34,13 +34,12 @@ class BaseCardSerializer(serializers.ModelSerializer):
 
 
 class BaseCardListSerializer(serializers.ModelSerializer):
-    """列表页用的轻量版，不包含 au_mods 详情"""
-    au_mods_count = serializers.IntegerField(source='au_mods.count', read_only=True)
+    au_mods = AUModSerializer(many=True, read_only=True)
 
     class Meta:
         model = BaseCard
         fields = [
             'id', 'name', 'fandom', 'mbti',
-            'quick_labels', 'au_mods_count',
+            'quick_labels', 'au_mods',
             'created_at', 'updated_at',
         ]
