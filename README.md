@@ -10,6 +10,9 @@
 
 前端仓库：[Fanfic-Assistant](https://github.com/YennieP/Fanfic-Assistant)
 
+**🌐 后端 API 地址：[https://web-production-29e7.up.railway.app](https://web-production-29e7.up.railway.app)**
+
+
 ---
 
 ## 技术栈
