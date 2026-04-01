@@ -1,6 +1,6 @@
 # Fanfic Assistant Backend — Django REST API
 
-> 中文同人文长文写作辅助工具的后端服务，提供角色卡管理、AU Mod 管理、用户认证等 API 接口。
+> 中文同人文长文写作辅助工具的后端服务，提供角色卡管理、AU Mod 管理、关系实体管理、用户认证等 API 接口。
 
 ---
 
@@ -12,7 +12,6 @@
 
 **🌐 后端 API 地址：[https://web-production-29e7.up.railway.app](https://web-production-29e7.up.railway.app)**
 
-
 ---
 
 ## 技术栈
@@ -23,10 +22,10 @@
 | 认证 | JWT（djangorestframework-simplejwt）|
 | 数据库 | SQLite（开发）/ PostgreSQL（生产）|
 | 缓存 | Redis（待接入）|
-| 异步队列 | Bull + Redis（待接入）|
+| 异步队列 | Celery + Redis（待接入）|
 | 跨域 | django-cors-headers |
 | 命名转换 | djangorestframework-camel-case |
-| 部署 | Railway（计划中）|
+| 部署 | Railway |
 
 ---
 
@@ -39,8 +38,8 @@ fanfic-assistant-backend/
     urls.py           # 根路由
     wsgi.py
   characters/
-    models.py         # BaseCard、AUMod 数据模型
-    serializers.py    # 序列化器（列表版 + 详情版）
+    models.py         # BaseCard、AUMod、Relationship、RelationshipMembership 数据模型
+    serializers.py    # 序列化器
     views.py          # ViewSet
     urls.py           # 嵌套路由
     admin.py          # Django Admin 注册
@@ -67,16 +66,6 @@ fanfic-assistant-backend/
 | POST | `/api/token/refresh/` | 刷新 access token | 公开 |
 | GET | `/api/auth/me/` | 获取当前用户信息 | 需登录 |
 
-**注册请求体：**
-```json
-{
-  "username": "yanxi",
-  "email": "yanxi@example.com",
-  "password": "yourpassword",
-  "password_confirm": "yourpassword"
-}
-```
-
 **登录响应：**
 ```json
 {
@@ -102,22 +91,6 @@ Authorization: Bearer <access_token>
 | PATCH | `/api/characters/:id/` | 更新角色卡 |
 | DELETE | `/api/characters/:id/` | 删除角色卡 |
 
-**列表视图字段（轻量）：**
-```json
-{
-  "id": "uuid",
-  "name": "林宇",
-  "fandom": "某某组合",
-  "mbti": "INTJ",
-  "quickLabels": [],
-  "auMods": [],
-  "createdAt": "...",
-  "updatedAt": "..."
-}
-```
-
-**详情视图字段（完整）：** 包含所有字段，见数据模型章节。
-
 ---
 
 ### AU Mod
@@ -129,6 +102,33 @@ Authorization: Bearer <access_token>
 | GET | `/api/characters/:id/mods/:modId/` | 获取 AU Mod 详情 |
 | PATCH | `/api/characters/:id/mods/:modId/` | 更新 AU Mod |
 | DELETE | `/api/characters/:id/mods/:modId/` | 删除 AU Mod |
+
+---
+
+### 关系实体
+
+关系实体是独立存在的实体，不从属于任何单一角色。激活条件为参与者中的角色同时在场。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/relationships/` | 获取当前用户的所有关系实体 |
+| POST | `/api/relationships/` | 创建关系实体 |
+| GET | `/api/relationships/:id/` | 获取关系实体详情（含 memberships）|
+| PATCH | `/api/relationships/:id/` | 更新关系基调 |
+| DELETE | `/api/relationships/:id/` | 删除关系实体 |
+| GET | `/api/relationships/:id/memberships/` | 获取所有参与者 mod |
+| GET | `/api/relationships/:id/memberships/:mId/` | 获取单个参与者 mod 详情 |
+| PATCH | `/api/relationships/:id/memberships/:mId/` | 更新参与者 mod |
+
+**创建关系实体请求体：**
+```json
+{
+  "overall_tone": "关系整体基调描述",
+  "participant_ids": ["character-uuid-1", "character-uuid-2"]
+}
+```
+
+> `participant_ids` 仅在创建时有效，至少需要 2 个参与者且必须属于当前用户。创建后系统自动为每个参与者建立空 membership。Membership 随关系实体创建/删除，不支持单独新增或删除。
 
 ---
 
@@ -173,6 +173,32 @@ class AUMod(models.Model):
     role_current_situation   # 当前人生处境
     quick_labels             # AU 专属性格标签（JSONField）
     forbidden_behaviors      # AU 专属人设红线（JSONField）
+    inherit_exclude          # 从 BaseCard 排除的条目 ID（JSONField）
+                             # 结构: {"quick_labels": ["id1"], "forbidden_behaviors": ["id2"]}
+```
+
+### Relationship
+
+```python
+class Relationship(models.Model):
+    owner                    # 关联用户（用于访问控制）
+    overall_tone             # 关系整体基调（客观描述，不预设视角）
+    participants             # 参与角色（ManyToManyField，通过 RelationshipMembership）
+```
+
+### RelationshipMembership
+
+每个参与者在关系实体中的独立 mod，复用与 AUMod 完全相同的继承机制。
+
+```python
+class RelationshipMembership(models.Model):
+    relationship             # 关联关系实体（ForeignKey）
+    character                # 关联角色（ForeignKey）
+    nicknames_for_others     # 对其他成员的称呼（JSONField）
+                             # 结构: [{"calls": "陈默", "as": ["老陈", "陈队"]}]
+    quick_labels             # 关系专属性格切面（JSONField）
+    forbidden_behaviors      # 关系专属禁止行为（JSONField）
+    inherit_exclude          # 从 BaseCard 排除的条目 ID（JSONField）
 ```
 
 ---
@@ -182,12 +208,11 @@ class AUMod(models.Model):
 后端存储使用 `snake_case`，API 输出自动转换为 `camelCase`（由 `djangorestframework-camel-case` 处理）：
 
 ```
-后端：quick_labels → API 输出：quickLabels
-后端：au_name     → API 输出：auName
-后端：role_title  → API 输出：roleTitle
+后端：quick_labels      → API 输出：quickLabels
+后端：au_name           → API 输出：auName
+后端：inherit_exclude   → API 输出：inheritExclude
+后端：overall_tone      → API 输出：overallTone
 ```
-
-前端 service 层负责将 `roleTitle/roleAge/roleCurrentSituation` 映射回嵌套的 `role` 对象。
 
 ---
 
@@ -230,20 +255,26 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173
 
 ---
 
-## 待开发功能
+## 架构审查与待修正问题
 
-- [ ] 关系实体 API（Relationship Entity）
-- [ ] 示例库 API（台词示例片段）
-- [ ] Redis 缓存接入
-- [ ] PostgreSQL 迁移（Railway 部署）
-- [ ] 写作生成 API（RAG pipeline）
-- [ ] Bull + Redis 异步队列
+| 问题 | 状态 | 解决时间节点 |
+|---|---|---|
+| Relationship 独立 model | ✅ 已修正 | — |
+| AUMod `inherit_exclude` 字段缺失 | ✅ 已修正（字段已加，前端继承选择 UI 待实现）| — |
+| TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写作界面开发前 |
+| 向量数据库选型接入 | ❌ 待修正 | 写作界面开发前（必须）|
+| 异步队列方案（Celery + Redis）| ⚠️ 待修正 | 写作界面开发前 |
 
 ---
 
-## 部署（Railway）
+## 待开发功能
 
-待完成，部署后更新此处生产环境地址。
+- [ ] 关系实体前端 UI（model 已就绪，API 端点已完成）
+- [ ] TAXONOMY 全局标签表后端存储
+- [ ] 示例库 API（台词示例片段，依赖向量数据库）
+- [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
+- [ ] Celery + Redis 异步队列
+- [ ] 写作生成 API（RAG pipeline）
 
 ---
 
