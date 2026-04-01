@@ -65,6 +65,11 @@ class AUMod(models.Model):
     quick_labels = models.JSONField(default=list, blank=True)
     forbidden_behaviors = models.JSONField(default=list, blank=True)
 
+    # Fix 2: 选择性继承
+    # 结构: {"quick_labels": ["id1", "id2"], "forbidden_behaviors": ["id3"]}
+    # 值为需要从 BaseCard 排除的条目 ID 列表
+    inherit_exclude = models.JSONField(default=dict, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -73,3 +78,65 @@ class AUMod(models.Model):
 
     def __str__(self):
         return f'{self.au_name} ({self.character.name})'
+
+
+class Relationship(models.Model):
+    """
+    Fix 1: 关系实体作为独立 model 存在，不属于任何单一角色。
+    激活条件：参与者中的角色同时在场时自动激活。
+    participants 通过 RelationshipMembership through model 关联，
+    每个参与者有独立的 member mod（复用 AUMod 继承机制）。
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='relationships',
+        help_text='用于访问控制，不代表关系从属于该用户之外的某个角色'
+    )
+    overall_tone = models.TextField(blank=True, help_text='关系整体基调，客观描述，不预设视角')
+    participants = models.ManyToManyField(
+        BaseCard,
+        through='RelationshipMembership',
+        related_name='relationships'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'Relationship ({self.id})'
+
+
+class RelationshipMembership(models.Model):
+    """
+    每个参与者在关系实体中的独立 mod。
+    复用与 AUMod 完全相同的继承机制（inherit_exclude + append）。
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    relationship = models.ForeignKey(
+        Relationship, on_delete=models.CASCADE, related_name='memberships'
+    )
+    character = models.ForeignKey(
+        BaseCard, on_delete=models.CASCADE, related_name='memberships'
+    )
+
+    # 该参与者对其他成员的称呼
+    # 结构: [{"calls": "陈默", "as": ["老陈", "陈队"]}, ...]
+    nicknames_for_others = models.JSONField(default=list, blank=True)
+
+    # 关系专属性格切面（同 AUMod 继承逻辑）
+    quick_labels = models.JSONField(default=list, blank=True)
+    forbidden_behaviors = models.JSONField(default=list, blank=True)
+    inherit_exclude = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['relationship', 'character']]
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'{self.character.name} in Relationship({self.relationship_id})'
