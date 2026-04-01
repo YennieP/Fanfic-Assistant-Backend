@@ -48,6 +48,14 @@ fanfic-assistant-backend/
     serializers.py    # 注册序列化器
     views.py          # 注册、获取当前用户
     urls.py
+  logs/
+    models.py         # RestApiLog、LlmCallLog
+    context.py        # request_id ContextVar（middleware → service 层零耦合传递）
+    middleware.py     # REST API 请求自动记录
+    decorators.py     # @log_llm_call 装饰器（Phase 2 接 LLM 时直接挂）
+    queue.py          # QueueHandler + QueueListener 异步写入
+    admin.py          # Dashboard（今日统计 summary）
+    migrations/
   .env                # 环境变量（不提交到 Git）
   requirements.txt
   manage.py
@@ -275,6 +283,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173
 - [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
 - [ ] Celery + Redis 异步队列
 - [ ] 写作生成 API（RAG pipeline）
+- [ ] LlmCallLog 激活（decorator 已就绪，Phase 2 接 LLM 时挂上去）
 
 ---
 
