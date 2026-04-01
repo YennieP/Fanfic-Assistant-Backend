@@ -25,12 +25,14 @@ INSTALLED_APPS = [
     'corsheaders', # CORS，处理跨域资源共享
     'characters', # 角色卡app
     'users', # 用户app
+    'logs',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware', # CORS，必须放在第一个，因为必须在响应被其他中间件修改前添加
     'django.middleware.security.SecurityMiddleware', # 提供一系列安全增强功能
     'whitenoise.middleware.WhiteNoiseMiddleware', # 在生产环境（DEBUG=False）中高效地提供静态文件。它需要紧跟 Security，因为WhiteNoise 需要尽早处理静态文件请求，避免不必要的开销
+    'logs.middleware.RequestLoggingMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware', # 启用会话支持。
     'django.middleware.common.CommonMiddleware', # 提供一些通用功能,需要访问请求的路径信息，但不需要会话数据
     'django.middleware.csrf.CsrfViewMiddleware', # 跨站请求伪造（CSRF）保护
