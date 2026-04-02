@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'characters', # 角色卡app
     'users', # 用户app
     'logs',
+    'generation',
 ]
 
 MIDDLEWARE = [
@@ -116,3 +117,5 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
+
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
