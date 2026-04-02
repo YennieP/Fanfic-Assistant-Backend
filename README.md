@@ -21,6 +21,8 @@
 | 后端框架 | Django 5 + Django REST Framework |
 | 认证 | JWT（djangorestframework-simplejwt）|
 | 数据库 | SQLite（开发）/ PostgreSQL（生产）|
+| LLM | Anthropic SDK / Google Gen AI SDK |
+| 加密 | cryptography（Fernet 对称加密）|
 | 缓存 | Redis（待接入）|
 | 异步队列 | Celery + Redis（待接入）|
 | 跨域 | django-cors-headers |
@@ -34,29 +36,39 @@
 ```
 fanfic-assistant-backend/
   core/
-    settings.py       # 项目配置
-    urls.py           # 根路由
+    settings.py
+    urls.py
     wsgi.py
   characters/
-    models.py         # BaseCard、AUMod、Relationship、RelationshipMembership 数据模型
-    serializers.py    # 序列化器
-    views.py          # ViewSet
-    urls.py           # 嵌套路由
-    admin.py          # Django Admin 注册
+    models.py         # BaseCard、AUMod、Relationship、RelationshipMembership
+    serializers.py
+    views.py
+    urls.py
+    admin.py
     migrations/
   users/
-    serializers.py    # 注册序列化器
-    views.py          # 注册、获取当前用户
+    models.py         # UserLLMConfig（provider + 加密 API Key）
+    serializers.py    # LLMConfigSerializer（api_key 永不返回）
+    views.py          # LLMConfigView
     urls.py
+    encryption.py     # Fernet 加密/解密工具
   logs/
     models.py         # RestApiLog、LlmCallLog
-    context.py        # request_id ContextVar（middleware → service 层零耦合传递）
+    context.py        # request_id ContextVar
     middleware.py     # REST API 请求自动记录
-    decorators.py     # @log_llm_call 装饰器（Phase 2 接 LLM 时直接挂）
+    decorators.py     # @log_llm_call 装饰器
     queue.py          # QueueHandler + QueueListener 异步写入
-    admin.py          # Dashboard（今日统计 summary）
+    admin.py          # Dashboard
     migrations/
-  .env                # 环境变量（不提交到 Git）
+  generation/
+    providers/
+      base.py         # 抽象基类
+      anthropic.py    # Anthropic Claude 实现
+      gemini.py       # Google Gemini 实现
+    prompt.py         # 角色卡 → prompt 构建逻辑
+    views.py          # SSE streaming endpoint
+    urls.py
+  .env
   requirements.txt
   manage.py
 ```
@@ -113,7 +125,65 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 关系实体
+### LLM 配置
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/auth/llm-config/` | 获取当前用户 LLM 配置（不返回 key 明文，只返回 hasKey + provider）|
+| POST | `/api/auth/llm-config/` | 保存或更新 LLM 配置 |
+
+**请求体：**
+```json
+{
+  "provider": "anthropic",
+  "api_key": "sk-ant-..."
+}
+```
+
+**响应体：**
+```json
+{
+  "hasKey": true,
+  "provider": "anthropic"
+}
+```
+
+支持的 provider：`anthropic`（Claude）、`gemini`（Google Gemini）。API Key 使用 Fernet 对称加密存储，明文永不出现在任何 API response 中。
+
+---
+
+### 生成
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/generate/stream/` | SSE streaming 生成，返回 `text/event-stream` |
+
+**请求体：**
+```json
+{
+  "characterId": "uuid",
+  "auModId": "uuid",
+  "sceneInput": {
+    "location": "便利店门口",
+    "intent": "陈默质疑林宇的决定，林宇表面接受但内心受伤",
+    "characters": ["林宇", "陈默"],
+    "time": "深夜",
+    "tone": "压抑",
+    "perspective": "林宇视角"
+  }
+}
+```
+
+**SSE 事件格式：**
+```
+data: {"type": "chunk", "content": "生成的文字片段"}
+data: {"type": "done"}
+data: {"type": "error", "message": "错误信息"}
+```
+
+速率限制：每用户每分钟最多 10 次请求。
+
+---
 
 关系实体是独立存在的实体，不从属于任何单一角色。激活条件为参与者中的角色同时在场。
 
@@ -185,7 +255,16 @@ class AUMod(models.Model):
                              # 结构: {"quick_labels": ["id1"], "forbidden_behaviors": ["id2"]}
 ```
 
-### Relationship
+### UserLLMConfig
+
+```python
+class UserLLMConfig(models.Model):
+    user                     # OneToOneField → User
+    provider                 # 枚举：anthropic / gemini
+    api_key_encrypted        # Fernet 加密存储，永不明文返回
+```
+
+---
 
 ```python
 class Relationship(models.Model):
@@ -259,6 +338,7 @@ DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 DATABASE_URL=sqlite:///db.sqlite3
 CORS_ALLOWED_ORIGINS=http://localhost:5173
+ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 ```
 
 ---
@@ -282,8 +362,9 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173
 - [ ] 示例库 API（台词示例片段，依赖向量数据库）
 - [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
 - [ ] Celery + Redis 异步队列
-- [ ] 写作生成 API（RAG pipeline）
-- [ ] LlmCallLog 激活（decorator 已就绪，Phase 2 接 LLM 时挂上去）
+- [ ] 写作生成 API 异步化（当前为同步 streaming，高并发时需迁移）
+- [ ] LLM-as-judge 一致性评估 API
+- [ ] @log_llm_call decorator 接入生成 pipeline
 
 ---
 
