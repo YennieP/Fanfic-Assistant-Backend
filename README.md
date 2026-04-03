@@ -56,13 +56,13 @@ fanfic-assistant-backend/
     models.py         # RestApiLog、LlmCallLog
     context.py        # request_id ContextVar
     middleware.py     # REST API 请求自动记录
-    decorators.py     # @log_llm_call 装饰器
+    decorators.py     # @log_llm_call 装饰器（支持普通返回值和 generator 两种路径）
     queue.py          # QueueHandler + QueueListener 异步写入
     admin.py          # Dashboard
     migrations/
   generation/
     providers/
-      base.py         # 抽象基类
+      base.py         # 抽象基类 + UsageInfo dataclass
       anthropic.py    # Anthropic Claude 实现
       gemini.py       # Google Gemini 实现
     prompt.py         # 角色卡 → prompt 构建逻辑
@@ -185,6 +185,8 @@ data: {"type": "error", "message": "错误信息"}
 
 ---
 
+### 关系实体
+
 关系实体是独立存在的实体，不从属于任何单一角色。激活条件为参与者中的角色同时在场。
 
 | 方法 | 路径 | 说明 |
@@ -255,16 +257,7 @@ class AUMod(models.Model):
                              # 结构: {"quick_labels": ["id1"], "forbidden_behaviors": ["id2"]}
 ```
 
-### UserLLMConfig
-
-```python
-class UserLLMConfig(models.Model):
-    user                     # OneToOneField → User
-    provider                 # 枚举：anthropic / gemini
-    api_key_encrypted        # Fernet 加密存储，永不明文返回
-```
-
----
+### Relationship
 
 ```python
 class Relationship(models.Model):
@@ -287,6 +280,33 @@ class RelationshipMembership(models.Model):
     forbidden_behaviors      # 关系专属禁止行为（JSONField）
     inherit_exclude          # 从 BaseCard 排除的条目 ID（JSONField）
 ```
+
+### UserLLMConfig
+
+```python
+class UserLLMConfig(models.Model):
+    user                     # OneToOneField → User
+    provider                 # 枚举：anthropic / gemini
+    api_key_encrypted        # Fernet 加密存储，永不明文返回
+```
+
+---
+
+## Generation Pipeline
+
+```
+generation/
+  providers/
+    base.py       # 抽象基类 BaseProvider + UsageInfo dataclass
+    anthropic.py  # claude-sonnet-4-20250514
+    gemini.py     # gemini-2.5-flash
+  prompt.py       # 角色卡 → system/user prompt 构建
+  views.py        # POST /api/generate/stream/ SSE endpoint
+```
+
+**LlmCallLog 已接入生成 pipeline。** 每次 LLM 调用的 latency、token 用量、成功/失败均通过 `@log_llm_call(feature="character_generate")` 自动记录。
+
+实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；`@log_llm_call` decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。
 
 ---
 
@@ -349,6 +369,7 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 |---|---|---|
 | Relationship 独立 model | ✅ 已修正 | — |
 | AUMod `inherit_exclude` 字段缺失 | ✅ 已修正（字段已加，前端继承选择 UI 待实现）| — |
+| LlmCallLog 接入生成 pipeline | ✅ 已完成 | — |
 | TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写作界面开发前 |
 | 向量数据库选型接入 | ❌ 待修正 | 写作界面开发前（必须）|
 | 异步队列方案（Celery + Redis）| ⚠️ 待修正 | 写作界面开发前 |
@@ -364,7 +385,7 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 - [ ] Celery + Redis 异步队列
 - [ ] 写作生成 API 异步化（当前为同步 streaming，高并发时需迁移）
 - [ ] LLM-as-judge 一致性评估 API
-- [ ] @log_llm_call decorator 接入生成 pipeline
+- [x] @log_llm_call decorator 接入生成 pipeline
 
 ---
 

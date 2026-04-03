@@ -1,5 +1,5 @@
 import anthropic as anthropic_sdk
-from .base import BaseProvider
+from .base import BaseProvider, UsageInfo
 
 
 class AnthropicProvider(BaseProvider):
@@ -15,3 +15,11 @@ class AnthropicProvider(BaseProvider):
         ) as s:
             for text in s.text_stream:
                 yield text
+            # with 块结束前取用量，get_final_message() 在流关闭后仍可调用
+            final = s.get_final_message()
+
+        yield UsageInfo(
+            model=self.MODEL,
+            prompt_tokens=final.usage.input_tokens,
+            completion_tokens=final.usage.output_tokens,
+        )

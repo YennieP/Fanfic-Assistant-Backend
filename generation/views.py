@@ -3,18 +3,19 @@ import logging
 from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
+from django.core.cache import cache
 
 from characters.models import BaseCard, AUMod
 from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
-from django.core.cache import cache
+from logs.decorators import log_llm_call
 
 logger = logging.getLogger(__name__)
 
+
 def _is_rate_limited(user_id: int, rate: int = 10, period: int = 60) -> bool:
-    """简单的滑动窗口限流，rate 次 / period 秒"""
     key = f'ratelimit:generate:{user_id}'
     count = cache.get(key, 0)
     if count >= rate:
@@ -27,14 +28,12 @@ class GenerateStreamView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # 速率限制：每用户每分钟最多10次
         if _is_rate_limited(request.user.id):
             return StreamingHttpResponse(
                 _error_stream('请求过于频繁，请稍后再试'),
                 content_type='text/event-stream',
             )
 
-        # 检查 LLM 配置
         try:
             llm_config = request.user.llm_config
         except Exception:
@@ -43,7 +42,6 @@ class GenerateStreamView(APIView):
                 content_type='text/event-stream',
             )
 
-        # 解析请求（CamelCaseJSONParser 已自动转 snake_case）
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
         scene_input = request.data.get('scene_input', {})
@@ -59,7 +57,6 @@ class GenerateStreamView(APIView):
                 content_type='text/event-stream',
             )
 
-        # 获取角色
         try:
             character = BaseCard.objects.get(id=character_id, owner=request.user)
         except BaseCard.DoesNotExist:
@@ -68,7 +65,6 @@ class GenerateStreamView(APIView):
                 content_type='text/event-stream',
             )
 
-        # 获取 AUMod（可选）
         au_mod = None
         if au_mod_id:
             try:
@@ -76,7 +72,6 @@ class GenerateStreamView(APIView):
             except AUMod.DoesNotExist:
                 pass
 
-        # 解密 API Key，构建 provider
         try:
             api_key = decrypt_key(llm_config.api_key_encrypted)
         except Exception:
@@ -93,9 +88,17 @@ class GenerateStreamView(APIView):
 
         system_prompt, user_prompt = build_prompt(character, au_mod, scene_input)
 
+        # 用局部闭包包裹 provider.stream，让 decorator 能提取 user 并注入 log
+        @log_llm_call(feature='character_generate')
+        def _get_stream(user=None):
+            return provider.stream(system_prompt, user_prompt)
+
         def event_stream():
             try:
-                for chunk in provider.stream(system_prompt, user_prompt):
+                # _get_stream 返回的 generator 已由 decorator 包装：
+                # - str chunk 正常透传
+                # - UsageInfo sentinel 被过滤，迭代结束时自动写 LlmCallLog
+                for chunk in _get_stream(user=request.user):
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
                 yield f'data: {json.dumps({"type": "done"})}\n\n'
