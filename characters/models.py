@@ -10,6 +10,20 @@ class BaseCard(models.Model):
     # meta
     name = models.CharField(max_length=100)
     fandom = models.CharField(max_length=200, blank=True)
+
+    # gender
+    # 存储用户选择的代词选项：他 / 她 / 它 / 祂 / other
+    # 选 other 时，gender_type 和 gender_pronoun 必填
+    gender = models.CharField(max_length=10, blank=True)
+    gender_type = models.CharField(
+        max_length=50, blank=True,
+        help_text='仅 gender=other 时填写，例：双性、无性别、流性别'
+    )
+    gender_pronoun = models.CharField(
+        max_length=20, blank=True,
+        help_text='仅 gender=other 时填写，例：他们、TA、祂们'
+    )
+
     card_author = models.CharField(max_length=100, blank=True)
     version = models.CharField(max_length=20, default='v1.0')
     author_nicknames = models.JSONField(default=list, blank=True)
@@ -65,9 +79,8 @@ class AUMod(models.Model):
     quick_labels = models.JSONField(default=list, blank=True)
     forbidden_behaviors = models.JSONField(default=list, blank=True)
 
-    # Fix 2: 选择性继承
+    # 选择性继承
     # 结构: {"quick_labels": ["id1", "id2"], "forbidden_behaviors": ["id3"]}
-    # 值为需要从 BaseCard 排除的条目 ID 列表
     inherit_exclude = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -81,12 +94,6 @@ class AUMod(models.Model):
 
 
 class Relationship(models.Model):
-    """
-    Fix 1: 关系实体作为独立 model 存在，不属于任何单一角色。
-    激活条件：参与者中的角色同时在场时自动激活。
-    participants 通过 RelationshipMembership through model 关联，
-    每个参与者有独立的 member mod（复用 AUMod 继承机制）。
-    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name='relationships',
@@ -110,10 +117,6 @@ class Relationship(models.Model):
 
 
 class RelationshipMembership(models.Model):
-    """
-    每个参与者在关系实体中的独立 mod。
-    复用与 AUMod 完全相同的继承机制（inherit_exclude + append）。
-    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     relationship = models.ForeignKey(
         Relationship, on_delete=models.CASCADE, related_name='memberships'
@@ -122,11 +125,9 @@ class RelationshipMembership(models.Model):
         BaseCard, on_delete=models.CASCADE, related_name='memberships'
     )
 
-    # 该参与者对其他成员的称呼
     # 结构: [{"calls": "陈默", "as": ["老陈", "陈队"]}, ...]
     nicknames_for_others = models.JSONField(default=list, blank=True)
 
-    # 关系专属性格切面（同 AUMod 继承逻辑）
     quick_labels = models.JSONField(default=list, blank=True)
     forbidden_behaviors = models.JSONField(default=list, blank=True)
     inherit_exclude = models.JSONField(default=dict, blank=True)

@@ -13,13 +13,32 @@ def build_prompt(character: BaseCard, au_mod: AUMod | None, scene_input: dict) -
 
 
 def _build_system(character: BaseCard, au_mod: AUMod | None) -> str:
+    # 他/她/它/祂 直接用选项值作为代词；other 用用户自定义
+    if character.gender and character.gender != 'other':
+        pronoun = character.gender
+    elif character.gender == 'other':
+        pronoun = character.gender_pronoun or ''
+    else:
+        pronoun = ''
+
+    pronoun_instruction = (
+        f'全文统一使用「{pronoun}」称呼{character.name}，不得使用其他人称代词。'
+        if pronoun else ''
+    )
+
     lines = [
         '你是一个专业的中文同人文写作助手。严格依照以下角色设定创作，不得违反人设红线。',
-        '用第三人称叙述，语言自然流畅，情绪表达符合角色特质。直接开始创作，不解释思路。',
+        f'用第三人称叙述，语言自然流畅，情绪表达符合角色特质。{pronoun_instruction}直接开始创作，不解释思路。',
         '',
         '【角色设定】',
         f'角色名：{character.name}',
     ]
+
+    if pronoun:
+        if character.gender == 'other' and character.gender_type:
+            lines.append(f'性别：{character.gender_type}（代词：{pronoun}）')
+        else:
+            lines.append(f'性别代词：{pronoun}')
 
     if character.fandom:
         lines.append(f'来源：{character.fandom}')
@@ -91,22 +110,54 @@ def _build_system(character: BaseCard, au_mod: AUMod | None) -> str:
     return '\n'.join(lines)
 
 
+_LENGTH_MAP = {
+    'short': '短篇（300字以内）',
+    'medium': '中篇（300～800字）',
+    'long': '长篇（800字以上）',
+}
+
+
 def _build_user(scene_input: dict) -> str:
     lines = ['请根据以下场景信息创作：', '']
 
+    # 必填
     if scene_input.get('location'):
         lines.append(f'地点：{scene_input["location"]}')
-    if scene_input.get('characters'):
-        chars = scene_input['characters']
-        if isinstance(chars, list):
-            lines.append(f'在场角色：{", ".join(chars)}')
+
+    # 主要在场角色
+    chars = scene_input.get('characters', [])
+    if chars:
+        lines.append(f'主要在场角色：{", ".join(chars)}')
+
+    # 次要/背景角色
+    secondary = scene_input.get('secondary_characters', [])
+    if secondary:
+        lines.append(f'次要/背景角色：{", ".join(secondary)}')
+
+    # 叙事设置
     if scene_input.get('time'):
         lines.append(f'时间：{scene_input["time"]}')
     if scene_input.get('tone'):
         lines.append(f'基调：{scene_input["tone"]}')
     if scene_input.get('perspective'):
         lines.append(f'叙述视角：{scene_input["perspective"]}')
+
+    # 创作指引
+    if scene_input.get('scene_role'):
+        lines.append(f'场景作用：{scene_input["scene_role"]}')
+    if scene_input.get('target_state'):
+        lines.append(f'目标状态：{scene_input["target_state"]}')
+    if scene_input.get('desired_length'):
+        label = _LENGTH_MAP.get(scene_input['desired_length'], '')
+        if label:
+            lines.append(f'篇幅：{label}')
+
+    # 写作意图（放最后，紧接生成指令）
     if scene_input.get('intent'):
         lines.append(f'\n写作意图：{scene_input["intent"]}')
+
+    # 场景禁止项（单独成段，确保模型不遗漏）
+    if scene_input.get('scene_restrictions'):
+        lines.append(f'\n【本场景禁止出现】\n{scene_input["scene_restrictions"]}')
 
     return '\n'.join(lines)

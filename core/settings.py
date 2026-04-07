@@ -4,6 +4,7 @@ import os
 import dj_database_url
 
 # 将.env的内容写入当前进程的环境变量 os.environ
+# load_dotenv(override=True)
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent

@@ -66,6 +66,8 @@ fanfic-assistant-backend/
       anthropic.py    # Anthropic Claude implementation
       gemini.py       # Google Gemini implementation
     prompt.py         # Character card → prompt builder
+                      # system prompt: injects gender pronoun instruction (unified throughout, must not be violated)
+                      # user prompt: injects full scene fields (secondary characters, scene role, target state, desired length, scene restrictions)
     views.py          # POST /api/generate/stream/ SSE endpoint
     urls.py
   .env
@@ -155,7 +157,12 @@ Supported providers: `anthropic` (Claude), `gemini` (Google Gemini). API Keys ar
     "characters": ["Lin Yu", "Chen Mo"],
     "time": "late night",
     "tone": "oppressive",
-    "perspective": "Lin Yu's POV"
+    "perspective": "Lin Yu's POV",
+    "secondaryCharacters": ["passerby"],     // optional
+    "sceneRole": "escalate conflict",         // optional
+    "targetState": "relationship more tense", // optional
+    "desiredLength": "medium",                // optional: short / medium / long
+    "sceneRestrictions": "no physical contact" // optional
   }
 }
 ```
@@ -198,6 +205,9 @@ class BaseCard(models.Model):
     owner                    # FK → User
     name                     # character name
     fandom                   # source work
+    gender                   # pronoun option: 他/她/它/祂/other
+    gender_type              # only for other — e.g. non-binary, genderfluid (CharField)
+    gender_pronoun           # only for other — e.g. they/them, TA (CharField)
     mbti                     # MBTI type
     core_values              # JSONField
     core_fears               # JSONField
@@ -511,7 +521,12 @@ Authorization: Bearer <access_token>
     "characters": ["林宇", "陈默"],
     "time": "深夜",
     "tone": "压抑",
-    "perspective": "林宇视角"
+    "perspective": "林宇视角",
+    "secondaryCharacters": ["路人甲"],   // 可选
+    "sceneRole": "推进冲突",             // 可选
+    "targetState": "两人关系更紧张",     // 可选
+    "desiredLength": "medium",           // 可选：short / medium / long
+    "sceneRestrictions": "不能出现肢体接触" // 可选
   }
 }
 ```
@@ -554,6 +569,9 @@ class BaseCard(models.Model):
     owner                    # 关联用户
     name                     # 角色名
     fandom                   # 来源作品
+    gender                   # 代词选项：他/她/它/祂/other
+    gender_type              # 仅 other 时填写，例：双性、流性别（CharField）
+    gender_pronoun           # 仅 other 时填写，例：他们、TA（CharField）
     mbti                     # MBTI 类型
     core_values              # 核心价值观（JSONField）
     core_fears               # 核心恐惧（JSONField）
@@ -620,6 +638,8 @@ generation/
     anthropic.py  # claude-sonnet-4-20250514
     gemini.py     # gemini-2.5-flash
   prompt.py       # 角色卡 → system/user prompt 构建
+                  # system prompt 注入性别代词指令（全文统一，不得违反）
+                  # user prompt 注入完整场景字段（含次要角色、场景作用、目标状态、篇幅、禁止项）
   views.py        # POST /api/generate/stream/ SSE endpoint
 ```
 

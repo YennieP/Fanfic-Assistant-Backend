@@ -9,7 +9,7 @@ class AUModSerializer(serializers.ModelSerializer):
             'id', 'au_name', 'setting',
             'role_title', 'role_age', 'role_current_situation',
             'quick_labels', 'forbidden_behaviors',
-            'inherit_exclude',  # Fix 2
+            'inherit_exclude',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -50,7 +50,6 @@ class RelationshipSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def validate(self, data):
-        # 创建时必须提供参与者
         if not self.instance and not data.get('participant_ids'):
             raise serializers.ValidationError(
                 {'participant_ids': '创建关系实体时必须指定参与者'}
@@ -64,7 +63,6 @@ class RelationshipSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         participant_ids = validated_data.pop('participant_ids')
         relationship = Relationship.objects.create(**validated_data)
-        # 只为属于该用户的角色创建 membership（安全过滤）
         characters = BaseCard.objects.filter(
             id__in=participant_ids,
             owner=validated_data['owner']
@@ -77,7 +75,6 @@ class RelationshipSerializer(serializers.ModelSerializer):
         return relationship
 
     def update(self, instance, validated_data):
-        # participant_ids 在更新时忽略（参与者管理待关系实体 UI 实现后处理）
         validated_data.pop('participant_ids', None)
         return super().update(instance, validated_data)
 
@@ -88,7 +85,7 @@ class BaseCardSerializer(serializers.ModelSerializer):
     class Meta:
         model = BaseCard
         fields = [
-            'id', 'name', 'fandom', 'card_author', 'version',
+            'id', 'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'card_author', 'version',
             'author_nicknames',
             'mbti', 'mbti_notes', 'core_values', 'core_fears', 'key_experiences',
             'quick_labels', 'behavioral_patterns', 'forbidden_behaviors',
@@ -107,7 +104,7 @@ class BaseCardListSerializer(serializers.ModelSerializer):
     class Meta:
         model = BaseCard
         fields = [
-            'id', 'name', 'fandom', 'mbti',
+            'id', 'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'mbti',
             'quick_labels', 'au_mods',
             'created_at', 'updated_at',
         ]
