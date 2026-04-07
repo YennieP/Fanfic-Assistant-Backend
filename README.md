@@ -1,16 +1,373 @@
+[English](#english) | [中文](#中文)
+
+---
+
+<a name="english"></a>
+
+# Fanfic Assistant Backend — Django REST API
+
+> Backend service for a Chinese fanfiction long-form writing assistant, providing REST APIs for character card management, AU Mod management, relationship entities, user authentication, and AI text generation.
+
+**🌐 API Base URL: [https://web-production-29e7.up.railway.app](https://web-production-29e7.up.railway.app)**
+
+- Web Frontend: [Fanfic-Assistant](https://github.com/YennieP/Fanfic-Assistant)
+- Mobile Client: [Fanfic-Assistant-Mobile](https://github.com/YennieP/Fanfic-Assistant-Mobile)
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Django 6 + Django REST Framework |
+| Auth | JWT (djangorestframework-simplejwt) |
+| Database | SQLite (dev) / PostgreSQL (prod) |
+| LLM | Anthropic SDK / Google Gen AI SDK |
+| Encryption | cryptography (Fernet symmetric encryption) |
+| Async Logging | QueueHandler + QueueListener |
+| Cross-origin | django-cors-headers |
+| Naming | djangorestframework-camel-case |
+| Deployment | Railway |
+
+---
+
+## Project Structure
+
+```
+fanfic-assistant-backend/
+  core/
+    settings.py
+    urls.py
+    wsgi.py
+  characters/
+    models.py         # BaseCard, AUMod, Relationship, RelationshipMembership
+    serializers.py
+    views.py
+    urls.py
+    admin.py
+    migrations/
+  users/
+    models.py         # UserLLMConfig (provider + encrypted API Key)
+    serializers.py    # LLMConfigSerializer (api_key never returned)
+    views.py          # LLMConfigView
+    urls.py
+    encryption.py     # Fernet encrypt/decrypt utilities
+  logs/
+    models.py         # RestApiLog, LlmCallLog
+    context.py        # request_id ContextVar
+    middleware.py     # Automatic REST API request logging
+    decorators.py     # @log_llm_call decorator (supports both regular and generator returns)
+    queue.py          # QueueHandler + QueueListener async writes
+    admin.py          # Admin dashboard
+    migrations/
+  generation/
+    providers/
+      base.py         # Abstract base class + UsageInfo dataclass
+      anthropic.py    # Anthropic Claude implementation
+      gemini.py       # Google Gemini implementation
+    prompt.py         # Character card → prompt builder
+    views.py          # POST /api/generate/stream/ SSE endpoint
+    urls.py
+  .env
+  requirements.txt
+  manage.py
+```
+
+---
+
+## API Reference
+
+### Auth
+
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| POST | `/api/auth/register/` | Register new user | Public |
+| POST | `/api/token/` | Login, obtain JWT tokens | Public |
+| POST | `/api/token/refresh/` | Refresh access token | Public |
+| GET | `/api/auth/me/` | Get current user info | Required |
+
+All authenticated requests must include:
+```
+Authorization: Bearer <access_token>
+```
+
+---
+
+### Character Cards
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/characters/` | List all character cards (lightweight) |
+| POST | `/api/characters/` | Create character card |
+| GET | `/api/characters/:id/` | Get character card detail (full data) |
+| PATCH | `/api/characters/:id/` | Update character card |
+| DELETE | `/api/characters/:id/` | Delete character card |
+
+---
+
+### AU Mods
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/characters/:id/mods/` | List all AU Mods for a character |
+| POST | `/api/characters/:id/mods/` | Create AU Mod |
+| GET | `/api/characters/:id/mods/:modId/` | Get AU Mod detail |
+| PATCH | `/api/characters/:id/mods/:modId/` | Update AU Mod |
+| DELETE | `/api/characters/:id/mods/:modId/` | Delete AU Mod |
+
+---
+
+### LLM Config
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/auth/llm-config/` | Get current user LLM config (returns hasKey + provider only, never the key plaintext) |
+| POST | `/api/auth/llm-config/` | Save or update LLM config |
+
+**Request:**
+```json
+{ "provider": "anthropic", "api_key": "sk-ant-..." }
+```
+
+**Response:**
+```json
+{ "hasKey": true, "provider": "anthropic" }
+```
+
+Supported providers: `anthropic` (Claude), `gemini` (Google Gemini). API Keys are stored with Fernet symmetric encryption and never appear in any API response.
+
+---
+
+### Generation
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/generate/stream/` | SSE streaming generation, returns `text/event-stream` |
+
+**Request body:**
+```json
+{
+  "characterId": "uuid",
+  "auModId": "uuid",
+  "sceneInput": {
+    "location": "convenience store entrance",
+    "intent": "Chen Mo questions Lin Yu's decision; Lin Yu accepts on the surface but is hurt inside",
+    "characters": ["Lin Yu", "Chen Mo"],
+    "time": "late night",
+    "tone": "oppressive",
+    "perspective": "Lin Yu's POV"
+  }
+}
+```
+
+**SSE event format:**
+```
+data: {"type": "chunk", "content": "generated text fragment"}
+data: {"type": "done"}
+data: {"type": "error", "message": "error info"}
+```
+
+Rate limit: 10 requests per user per minute.
+
+---
+
+### Relationship Entities
+
+Relationships are independent entities, not owned by any single character. They activate when all participant characters are present in the scene.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/relationships/` | List all relationship entities for current user |
+| POST | `/api/relationships/` | Create relationship entity |
+| GET | `/api/relationships/:id/` | Get detail (including memberships) |
+| PATCH | `/api/relationships/:id/` | Update overall tone |
+| DELETE | `/api/relationships/:id/` | Delete relationship entity |
+| GET | `/api/relationships/:id/memberships/` | List all participant mods |
+| GET | `/api/relationships/:id/memberships/:mId/` | Get single participant mod |
+| PATCH | `/api/relationships/:id/memberships/:mId/` | Update participant mod |
+
+> `participant_ids` is only accepted at creation time (minimum 2 participants, must belong to current user). The system automatically creates an empty membership for each participant. Memberships are created/deleted with the relationship entity and cannot be added or removed individually.
+
+---
+
+## Data Models
+
+### BaseCard
+```python
+class BaseCard(models.Model):
+    owner                    # FK → User
+    name                     # character name
+    fandom                   # source work
+    mbti                     # MBTI type
+    core_values              # JSONField
+    core_fears               # JSONField
+    key_experiences          # JSONField
+    quick_labels             # JSONField
+    behavioral_patterns      # JSONField (trigger 4-dim + response 3-dim)
+    forbidden_behaviors      # JSONField
+    default_state            # default emotional baseline
+    emotional_triggers       # JSONField
+    emotion_expression_style # text
+    recovery_pattern         # text
+    conditions               # JSONField
+    physical_traits          # JSONField
+    speech_style_custom_tags # JSONField
+```
+
+### AUMod
+```python
+class AUMod(models.Model):
+    character                # FK → BaseCard
+    au_name                  # AU name
+    setting                  # world/background setting
+    role_title               # occupation/identity
+    role_age                 # age in this AU
+    role_current_situation   # current life situation
+    quick_labels             # JSONField
+    forbidden_behaviors      # JSONField
+    inherit_exclude          # JSONField — excluded BaseCard entry IDs
+                             # structure: {"quick_labels": ["id1"], "forbidden_behaviors": ["id2"]}
+```
+
+### Relationship / RelationshipMembership
+```python
+class Relationship(models.Model):
+    owner                    # FK → User (access control)
+    overall_tone             # objective description of relationship dynamic
+    participants             # ManyToManyField through RelationshipMembership
+
+class RelationshipMembership(models.Model):
+    relationship             # FK → Relationship
+    character                # FK → BaseCard
+    nicknames_for_others     # JSONField — [{"calls": "Chen Mo", "as": ["Lao Chen"]}]
+    quick_labels             # JSONField
+    forbidden_behaviors      # JSONField
+    inherit_exclude          # JSONField
+```
+
+### UserLLMConfig
+```python
+class UserLLMConfig(models.Model):
+    user                     # OneToOneField → User
+    provider                 # enum: anthropic / gemini
+    api_key_encrypted        # Fernet encrypted, never returned in plaintext
+```
+
+---
+
+## Generation Pipeline
+
+```
+generation/
+  providers/
+    base.py       # Abstract BaseProvider + UsageInfo dataclass
+    anthropic.py  # claude-sonnet-4-20250514
+    gemini.py     # gemini-2.5-flash
+  prompt.py       # Character card → system/user prompt construction
+  views.py        # POST /api/generate/stream/ SSE endpoint
+```
+
+**LlmCallLog is integrated into the generation pipeline.** Latency, token usage, and success/failure for every LLM call are automatically recorded via `@log_llm_call(feature="character_generate")`.
+
+Implementation: providers yield a `UsageInfo` sentinel after all text chunks; the decorator wraps the generator, transparently passes text chunks, captures `UsageInfo`, and writes `LlmCallLog` after iteration completes. The view layer and frontend are unaware of `UsageInfo`.
+
+---
+
+## Naming Convention
+
+Backend uses `snake_case`; API output is automatically converted to `camelCase` by `djangorestframework-camel-case`:
+
+```
+quick_labels    → quickLabels
+au_name         → auName
+inherit_exclude → inheritExclude
+overall_tone    → overallTone
+```
+
+---
+
+## Local Development
+
+### Requirements
+- Python 3.12+
+- pip
+
+### Setup
+
+```bash
+git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
+cd fanfic-assistant-backend
+
+python -m venv venv
+source venv/bin/activate        # macOS/Linux
+venv\Scripts\activate           # Windows
+
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
+
+Server runs at `http://localhost:8000`
+
+### Environment Variables (`.env`)
+
+```
+SECRET_KEY=django-insecure-xxx
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+DATABASE_URL=sqlite:///db.sqlite3
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+ENCRYPTION_KEY=<generate with Fernet.generate_key()>
+```
+
+---
+
+## Architecture Status
+
+| Item | Status | Notes |
+|---|---|---|
+| Relationship independent model | ✅ Done | — |
+| AUMod `inherit_exclude` field | ✅ Done | Field complete; UI pending |
+| LlmCallLog in generation pipeline | ✅ Done | — |
+| TAXONOMY backend storage | ⚠️ Pending | Before writing UI |
+| Vector database integration | ❌ Pending | Required before Phase 2 |
+| Celery + Redis async queue | ⚠️ Deferred | Re-evaluate at Phase 2 |
+
+---
+
+## Pending Features
+
+- [ ] Relationship entity frontend UI (backend complete)
+- [ ] TAXONOMY global tag table backend storage
+- [ ] Example library API (depends on vector database)
+- [ ] Vector database integration (pgvector / Chroma / Qdrant)
+- [ ] Celery + Redis async queue (deferred to Phase 2 evaluation)
+- [ ] LLM-as-judge consistency evaluation API
+- [x] `@log_llm_call` decorator integrated into generation pipeline
+
+---
+
+## Author
+
+**Yanxi Pan**
+CS Master's Student @ Northeastern University (Silicon Valley Campus, Class of 2027)
+Target Role: Applied ML Engineer — Generative AI / Content AI
+
+---
+
+---
+
+<a name="中文"></a>
+
 # Fanfic Assistant Backend — Django REST API
 
 > 中文同人文长文写作辅助工具的后端服务，提供角色卡管理、AU Mod 管理、关系实体管理、用户认证等 API 接口。
 
----
-
-## 项目背景
-
-本项目是 Yanxi Pan（Northeastern University CS 硕士在读，2027 届）的简历项目后端部分，方向为 Applied ML Engineer，聚焦生成式 AI 与内容 AI。
-
-前端仓库：[Fanfic-Assistant](https://github.com/YennieP/Fanfic-Assistant)
-
 **🌐 后端 API 地址：[https://web-production-29e7.up.railway.app](https://web-production-29e7.up.railway.app)**
+
+- 前端仓库：[Fanfic-Assistant](https://github.com/YennieP/Fanfic-Assistant)
+- 移动端仓库：[Fanfic-Assistant-Mobile](https://github.com/YennieP/Fanfic-Assistant-Mobile)
 
 ---
 
@@ -18,13 +375,12 @@
 
 | 层级 | 技术 |
 |---|---|
-| 后端框架 | Django 5 + Django REST Framework |
+| 后端框架 | Django 6 + Django REST Framework |
 | 认证 | JWT（djangorestframework-simplejwt）|
 | 数据库 | SQLite（开发）/ PostgreSQL（生产）|
 | LLM | Anthropic SDK / Google Gen AI SDK |
 | 加密 | cryptography（Fernet 对称加密）|
-| 缓存 | Redis（待接入）|
-| 异步队列 | Celery + Redis（待接入）|
+| 异步日志 | QueueHandler + QueueListener |
 | 跨域 | django-cors-headers |
 | 命名转换 | djangorestframework-camel-case |
 | 部署 | Railway |
@@ -86,14 +442,6 @@ fanfic-assistant-backend/
 | POST | `/api/token/refresh/` | 刷新 access token | 公开 |
 | GET | `/api/auth/me/` | 获取当前用户信息 | 需登录 |
 
-**登录响应：**
-```json
-{
-  "access": "eyJ...",
-  "refresh": "eyJ..."
-}
-```
-
 所有需要登录的接口请求头携带：
 ```
 Authorization: Bearer <access_token>
@@ -134,18 +482,12 @@ Authorization: Bearer <access_token>
 
 **请求体：**
 ```json
-{
-  "provider": "anthropic",
-  "api_key": "sk-ant-..."
-}
+{ "provider": "anthropic", "api_key": "sk-ant-..." }
 ```
 
 **响应体：**
 ```json
-{
-  "hasKey": true,
-  "provider": "anthropic"
-}
+{ "hasKey": true, "provider": "anthropic" }
 ```
 
 支持的 provider：`anthropic`（Claude）、`gemini`（Google Gemini）。API Key 使用 Fernet 对称加密存储，明文永不出现在任何 API response 中。
@@ -200,14 +542,6 @@ data: {"type": "error", "message": "错误信息"}
 | GET | `/api/relationships/:id/memberships/:mId/` | 获取单个参与者 mod 详情 |
 | PATCH | `/api/relationships/:id/memberships/:mId/` | 更新参与者 mod |
 
-**创建关系实体请求体：**
-```json
-{
-  "overall_tone": "关系整体基调描述",
-  "participant_ids": ["character-uuid-1", "character-uuid-2"]
-}
-```
-
 > `participant_ids` 仅在创建时有效，至少需要 2 个参与者且必须属于当前用户。创建后系统自动为每个参与者建立空 membership。Membership 随关系实体创建/删除，不支持单独新增或删除。
 
 ---
@@ -215,22 +549,17 @@ data: {"type": "error", "message": "错误信息"}
 ## 数据模型
 
 ### BaseCard
-
 ```python
 class BaseCard(models.Model):
     owner                    # 关联用户
     name                     # 角色名
     fandom                   # 来源作品
-    card_author              # 卡片作者
-    version                  # 版本
-    author_nicknames         # 作者昵称（JSONField）
     mbti                     # MBTI 类型
-    mbti_notes               # MBTI 具体体现
     core_values              # 核心价值观（JSONField）
     core_fears               # 核心恐惧（JSONField）
     key_experiences          # 重要经历（JSONField）
     quick_labels             # 性格标签（JSONField）
-    behavioral_patterns      # 行为模式（JSONField）
+    behavioral_patterns      # 行为模式（JSONField，trigger 四维度 + response 三维度）
     forbidden_behaviors      # 人设红线（JSONField）
     default_state            # 日常情绪基调
     emotional_triggers       # 情绪触发点（JSONField）
@@ -242,7 +571,6 @@ class BaseCard(models.Model):
 ```
 
 ### AUMod
-
 ```python
 class AUMod(models.Model):
     character                # 关联角色卡（ForeignKey）
@@ -257,32 +585,23 @@ class AUMod(models.Model):
                              # 结构: {"quick_labels": ["id1"], "forbidden_behaviors": ["id2"]}
 ```
 
-### Relationship
-
+### Relationship / RelationshipMembership
 ```python
 class Relationship(models.Model):
-    owner                    # 关联用户（用于访问控制）
-    overall_tone             # 关系整体基调（客观描述，不预设视角）
-    participants             # 参与角色（ManyToManyField，通过 RelationshipMembership）
-```
+    owner                    # 关联用户（访问控制）
+    overall_tone             # 关系整体基调（客观描述）
+    participants             # ManyToManyField through RelationshipMembership
 
-### RelationshipMembership
-
-每个参与者在关系实体中的独立 mod，复用与 AUMod 完全相同的继承机制。
-
-```python
 class RelationshipMembership(models.Model):
-    relationship             # 关联关系实体（ForeignKey）
-    character                # 关联角色（ForeignKey）
-    nicknames_for_others     # 对其他成员的称呼（JSONField）
-                             # 结构: [{"calls": "陈默", "as": ["老陈", "陈队"]}]
-    quick_labels             # 关系专属性格切面（JSONField）
-    forbidden_behaviors      # 关系专属禁止行为（JSONField）
-    inherit_exclude          # 从 BaseCard 排除的条目 ID（JSONField）
+    relationship             # FK → Relationship
+    character                # FK → BaseCard
+    nicknames_for_others     # JSONField — [{"calls": "陈默", "as": ["老陈", "陈队"]}]
+    quick_labels             # JSONField
+    forbidden_behaviors      # JSONField
+    inherit_exclude          # JSONField
 ```
 
 ### UserLLMConfig
-
 ```python
 class UserLLMConfig(models.Model):
     user                     # OneToOneField → User
@@ -306,19 +625,19 @@ generation/
 
 **LlmCallLog 已接入生成 pipeline。** 每次 LLM 调用的 latency、token 用量、成功/失败均通过 `@log_llm_call(feature="character_generate")` 自动记录。
 
-实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；`@log_llm_call` decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。
+实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。
 
 ---
 
 ## 命名转换规则
 
-后端存储使用 `snake_case`，API 输出自动转换为 `camelCase`（由 `djangorestframework-camel-case` 处理）：
+后端存储使用 `snake_case`，API 输出自动转换为 `camelCase`：
 
 ```
-后端：quick_labels      → API 输出：quickLabels
-后端：au_name           → API 输出：auName
-后端：inherit_exclude   → API 输出：inheritExclude
-后端：overall_tone      → API 输出：overallTone
+quick_labels    → quickLabels
+au_name         → auName
+inherit_exclude → inheritExclude
+overall_tone    → overallTone
 ```
 
 ---
@@ -326,7 +645,6 @@ generation/
 ## 本地开发
 
 ### 环境要求
-
 - Python 3.12+
 - pip
 
@@ -337,12 +655,10 @@ git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
 cd fanfic-assistant-backend
 
 python -m venv venv
-venv\Scripts\activate       # Windows
-source venv/bin/activate    # macOS/Linux
+source venv/bin/activate        # macOS/Linux
+venv\Scripts\activate           # Windows
 
 pip install -r requirements.txt
-
-# 创建 .env 文件（参考下方说明）
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
@@ -371,8 +687,8 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 | AUMod `inherit_exclude` 字段缺失 | ✅ 已修正（字段已加，前端继承选择 UI 待实现）| — |
 | LlmCallLog 接入生成 pipeline | ✅ 已完成 | — |
 | TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写作界面开发前 |
-| 向量数据库选型接入 | ❌ 待修正 | 写作界面开发前（必须）|
-| 异步队列方案（Celery + Redis）| ⚠️ 待修正 | 写作界面开发前 |
+| 向量数据库选型接入 | ❌ 待修正 | Phase 2 前（必须）|
+| Celery + Redis 异步队列 | ⚠️ 已延期 | Phase 2 前按需评估 |
 
 ---
 
@@ -382,10 +698,9 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 - [ ] TAXONOMY 全局标签表后端存储
 - [ ] 示例库 API（台词示例片段，依赖向量数据库）
 - [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
-- [ ] Celery + Redis 异步队列
-- [ ] 写作生成 API 异步化（当前为同步 streaming，高并发时需迁移）
+- [ ] Celery + Redis 异步队列（延期至 Phase 2 评估）
 - [ ] LLM-as-judge 一致性评估 API
-- [x] @log_llm_call decorator 接入生成 pipeline
+- [x] `@log_llm_call` decorator 接入生成 pipeline
 
 ---
 
