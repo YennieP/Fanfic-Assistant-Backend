@@ -1,4 +1,5 @@
 import json
+import uuid
 import logging
 from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
@@ -88,20 +89,26 @@ class GenerateStreamView(APIView):
 
         system_prompt, user_prompt = build_prompt(character, au_mod, scene_input)
 
-        # 用局部闭包包裹 provider.stream，让 decorator 能提取 user 并注入 log
-        @log_llm_call(feature='character_generate')
-        def _get_stream(user=None):
+        # 提前生成 generation_id，不依赖数据库操作。
+        # done 事件携带此 id 发给前端，前端用它触发评估请求。
+        # sync=True 保证 LlmCallLog 在 yield done 之前已落库，前端拿到 id 时可立即查询。
+        generation_id = uuid.uuid4()
+
+        @log_llm_call(feature='character_generate', sync=True)
+        def _get_stream(user=None, generation_id=None):
             return provider.stream(system_prompt, user_prompt)
 
         def event_stream():
             try:
-                # _get_stream 返回的 generator 已由 decorator 包装：
-                # - str chunk 正常透传
-                # - UsageInfo sentinel 被过滤，迭代结束时自动写 LlmCallLog
-                for chunk in _get_stream(user=request.user):
+                for chunk in _get_stream(user=request.user, generation_id=generation_id):
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
-                yield f'data: {json.dumps({"type": "done"})}\n\n'
+                # _get_stream 迭代结束 = _write_sync 已执行 = LlmCallLog 已落库
+                done_data = json.dumps({
+                    'type': 'done',
+                    'generationId': str(generation_id),
+                })
+                yield f'data: {done_data}\n\n'
             except Exception as e:
                 logger.exception('LLM streaming error')
                 data = json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)

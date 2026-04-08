@@ -70,6 +70,13 @@ fanfic-assistant-backend/
                       # user prompt: injects full scene fields (secondary characters, scene role, target state, desired length, scene restrictions)
     views.py          # POST /api/generate/stream/ SSE endpoint
     urls.py
+  evaluation/
+    models.py          # Defines ConsistencyScore model (links LlmCallLog with evaluation results)
+    prompt.py          # Construction of Judge prompts (merging character summaries with target text)
+    views.py           # API implementation for POST /api/evaluation/score/ endpoint
+    urls.py            # Routing for evaluation-related API endpoints
+    admin.py           # Admin dashboard configuration (daily metrics and average score analytics)
+    migrations/        # Database schema evolution files
   .env
   requirements.txt
   manage.py
@@ -170,11 +177,40 @@ Supported providers: `anthropic` (Claude), `gemini` (Google Gemini). API Keys ar
 **SSE event format:**
 ```
 data: {"type": "chunk", "content": "generated text fragment"}
-data: {"type": "done"}
+data: {"type": "done", "generationId": "uuid"}   // used to trigger consistency evaluation
 data: {"type": "error", "message": "error info"}
 ```
 
 Rate limit: 10 requests per user per minute.
+
+---
+
+### Consistency Evaluation
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/evaluation/score/` | LLM-as-judge consistency scoring, returns result synchronously |
+
+**Request body:**
+```json
+{
+  "generationId": "uuid",
+  "generatedText": "generated text content",
+  "characterId": "uuid",
+  "auModId": "uuid"
+}
+```
+
+**Response:**
+```json
+{
+  "score": 8,
+  "reasoning": "The character maintained restrained emotional expression...",
+  "evaluationId": "uuid"
+}
+```
+
+`generationId` comes from the `done` event of the generation endpoint. Scores are 0–10 integers using the user's configured LLM provider (BYOK). Results are stored in `ConsistencyScore`, linked to the original generation's `LlmCallLog` via `generationId`.
 
 ---
 
@@ -270,7 +306,7 @@ class UserLLMConfig(models.Model):
 ```
 generation/
   providers/
-    base.py       # Abstract BaseProvider + UsageInfo dataclass
+    base.py       # Abstract Base Classes + UsageInfo dataclass + CompleteResult dataclass
     anthropic.py  # claude-sonnet-4-20250514
     gemini.py     # gemini-2.5-flash
   prompt.py       # Character card → system/user prompt construction
@@ -279,7 +315,7 @@ generation/
 
 **LlmCallLog is integrated into the generation pipeline.** Latency, token usage, and success/failure for every LLM call are automatically recorded via `@log_llm_call(feature="character_generate")`.
 
-Implementation: providers yield a `UsageInfo` sentinel after all text chunks; the decorator wraps the generator, transparently passes text chunks, captures `UsageInfo`, and writes `LlmCallLog` after iteration completes. The view layer and frontend are unaware of `UsageInfo`.
+Implementation: providers yield a `UsageInfo` sentinel after all text chunks; the decorator wraps the generator, transparently passes text chunks, captures `UsageInfo`, and writes `LlmCallLog` after iteration completes. The view layer and frontend are unaware of `UsageInfo`. `@log_llm_call` supports a `sync=True` parameter: the generation call uses this to write `LlmCallLog` synchronously after the last chunk and before the `done` event (~5ms), guaranteeing the record exists when the frontend receives `generationId`. The `complete()` method is used for non-streaming calls (e.g. the judge) and also supports `sync=True`.
 
 ---
 
@@ -339,7 +375,8 @@ ENCRYPTION_KEY=<generate with Fernet.generate_key()>
 |---|---|---|
 | Relationship independent model | ✅ Done | — |
 | AUMod `inherit_exclude` field | ✅ Done | Field complete; UI pending |
-| LlmCallLog in generation pipeline | ✅ Done | — |
+| LlmCallLog in generation pipeline | ✅ Done | `generation_id` field added; `sync=True` path for streaming |
+| LLM-as-judge consistency evaluation | ✅ Done | `evaluation/` app; 0–10 integer score; `generation_id` links full chain |
 | TAXONOMY backend storage | ⚠️ Pending | Before writing UI |
 | Vector database integration | ❌ Pending | Required before Phase 2 |
 | Celery + Redis async queue | ⚠️ Deferred | Re-evaluate at Phase 2 |
@@ -353,8 +390,8 @@ ENCRYPTION_KEY=<generate with Fernet.generate_key()>
 - [ ] Example library API (depends on vector database)
 - [ ] Vector database integration (pgvector / Chroma / Qdrant)
 - [ ] Celery + Redis async queue (deferred to Phase 2 evaluation)
-- [ ] LLM-as-judge consistency evaluation API
-- [x] `@log_llm_call` decorator integrated into generation pipeline
+- [x] LLM-as-judge consistency evaluation (evaluation/ app, integrated in writing page, ConsistencyScore persisted)
+- [x] `@log_llm_call` decorator integrated into generation pipeline (sync=True path + generation_id field)
 
 ---
 
@@ -428,12 +465,19 @@ fanfic-assistant-backend/
     migrations/
   generation/
     providers/
-      base.py         # 抽象基类 + UsageInfo dataclass
+      base.py         # 抽象基类 + UsageInfo dataclass + CompleteResult dataclass
       anthropic.py    # Anthropic Claude 实现
       gemini.py       # Google Gemini 实现
     prompt.py         # 角色卡 → prompt 构建逻辑
     views.py          # SSE streaming endpoint
     urls.py
+  evaluation/
+    models.py         # ConsistencyScore model（关联 LlmCallLog + 评估结果）
+    prompt.py         # Judge prompt 构建（角色卡摘要 + 待评估文本）
+    views.py          # POST /api/evaluation/score/ endpoint
+    urls.py
+    admin.py          # Admin dashboard（今日评估数量 + 平均分）
+    migrations/
   .env
   requirements.txt
   manage.py
@@ -534,11 +578,40 @@ Authorization: Bearer <access_token>
 **SSE 事件格式：**
 ```
 data: {"type": "chunk", "content": "生成的文字片段"}
-data: {"type": "done"}
+data: {"type": "done", "generationId": "uuid"}   // 用于触发一致性评估
 data: {"type": "error", "message": "错误信息"}
 ```
 
 速率限制：每用户每分钟最多 10 次请求。
+
+---
+
+### 一致性评估
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/evaluation/score/` | LLM-as-judge 一致性评分，同步返回结果 |
+
+**请求体：**
+```json
+{
+  "generationId": "uuid",
+  "generatedText": "生成的文本内容",
+  "characterId": "uuid",
+  "auModId": "uuid"
+}
+```
+
+**响应体：**
+```json
+{
+  "score": 8,
+  "reasoning": "角色在对话中保持了克制的情绪表达...",
+  "evaluationId": "uuid"
+}
+```
+
+`generationId` 来自生成接口 `done` 事件的同名字段。评分使用用户当前配置的 LLM provider（BYOK 模式），取值为 0-10 整数。结果存入 `ConsistencyScore` 表，通过 `generationId` 关联被评估的生成记录（`LlmCallLog`）。
 
 ---
 
@@ -645,7 +718,7 @@ generation/
 
 **LlmCallLog 已接入生成 pipeline。** 每次 LLM 调用的 latency、token 用量、成功/失败均通过 `@log_llm_call(feature="character_generate")` 自动记录。
 
-实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。
+实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。`@log_llm_call` 支持 `sync=True` 参数：生成调用使用此参数，在最后一个 chunk yield 之后、`done` 事件发出之前同步写库（~5ms），保证前端收到 `generationId` 时记录已落库。`complete()` 方法供非流式调用（如评估 judge）使用，同样支持 `sync=True`。
 
 ---
 
@@ -705,7 +778,8 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 |---|---|---|
 | Relationship 独立 model | ✅ 已修正 | — |
 | AUMod `inherit_exclude` 字段缺失 | ✅ 已修正（字段已加，前端继承选择 UI 待实现）| — |
-| LlmCallLog 接入生成 pipeline | ✅ 已完成 | — |
+| LlmCallLog 接入生成 pipeline | ✅ 已完成 | 新增 `generation_id` 字段 + `sync=True` 同步写库路径 |
+| LLM-as-judge 一致性评估 | ✅ 已完成 | `evaluation/` app；0-10 整数评分；`generation_id` 串联完整链路 |
 | TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写作界面开发前 |
 | 向量数据库选型接入 | ❌ 待修正 | Phase 2 前（必须）|
 | Celery + Redis 异步队列 | ⚠️ 已延期 | Phase 2 前按需评估 |
@@ -719,8 +793,8 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 - [ ] 示例库 API（台词示例片段，依赖向量数据库）
 - [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
 - [ ] Celery + Redis 异步队列（延期至 Phase 2 评估）
-- [ ] LLM-as-judge 一致性评估 API
-- [x] `@log_llm_call` decorator 接入生成 pipeline
+- [x] LLM-as-judge 一致性评估（evaluation/ app，前端写作页集成，ConsistencyScore 落库）
+- [x] `@log_llm_call` decorator 接入生成 pipeline（含 sync=True 路径 + generation_id 字段）
 
 ---
 

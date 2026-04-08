@@ -1,5 +1,5 @@
 import anthropic as anthropic_sdk
-from .base import BaseProvider, UsageInfo
+from .base import BaseProvider, UsageInfo, CompleteResult
 
 
 class AnthropicProvider(BaseProvider):
@@ -15,11 +15,25 @@ class AnthropicProvider(BaseProvider):
         ) as s:
             for text in s.text_stream:
                 yield text
-            # with 块结束前取用量，get_final_message() 在流关闭后仍可调用
             final = s.get_final_message()
 
         yield UsageInfo(
             model=self.MODEL,
             prompt_tokens=final.usage.input_tokens,
             completion_tokens=final.usage.output_tokens,
+        )
+
+    def complete(self, system_prompt: str, user_prompt: str) -> CompleteResult:
+        client = anthropic_sdk.Anthropic(api_key=self.api_key)
+        msg = client.messages.create(
+            model=self.MODEL,
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{'role': 'user', 'content': user_prompt}],
+        )
+        return CompleteResult(
+            text=msg.content[0].text,
+            model=self.MODEL,
+            prompt_tokens=msg.usage.input_tokens,
+            completion_tokens=msg.usage.output_tokens,
         )

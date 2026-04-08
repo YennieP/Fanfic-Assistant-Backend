@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'users', # 用户app
     'logs',
     'generation',
+    'evaluation',
 ]
 
 MIDDLEWARE = [
