@@ -27,7 +27,6 @@ class GeminiProvider(BaseProvider):
             max_output_tokens=4000,
         )
 
-        # 最多重试 3 次，指数退避
         last_error = None
         for attempt in range(3):
             try:
@@ -65,18 +64,36 @@ class GeminiProvider(BaseProvider):
 
     def complete(self, system_prompt: str, user_prompt: str) -> CompleteResult:
         client = genai.Client(api_key=self.api_key)
-        response = client.models.generate_content(
-            model=self.MODEL,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=2000,
-            ),
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=2000,
         )
-        usage = response.usage_metadata
-        return CompleteResult(
-            text=response.text,
-            model=self.MODEL,
-            prompt_tokens=usage.prompt_token_count if usage else 0,
-            completion_tokens=usage.candidates_token_count if usage else 0,
-        )
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=self.MODEL,
+                    contents=user_prompt,
+                    config=config,
+                )
+                usage = response.usage_metadata
+                return CompleteResult(
+                    text=response.text,
+                    model=self.MODEL,
+                    prompt_tokens=usage.prompt_token_count if usage else 0,
+                    completion_tokens=usage.candidates_token_count if usage else 0,
+                )
+            except ServerError as e:
+                if e.code in _RETRY_CODES:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        'Gemini %s on attempt %d, retrying in %ds: %s',
+                        e.code, attempt + 1, wait, e,
+                    )
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+
+        raise last_error
