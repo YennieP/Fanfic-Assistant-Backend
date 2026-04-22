@@ -36,7 +36,7 @@ class GeminiProvider(BaseProvider):
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=1000,
+                max_output_tokens=2000,
             ),
         )
         usage = response.usage_metadata
