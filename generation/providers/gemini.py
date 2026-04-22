@@ -7,7 +7,7 @@ from .base import BaseProvider, UsageInfo, CompleteResult
 
 logger = logging.getLogger(__name__)
 
-_RETRY_STATUS_CODES = {503, 429}
+_RETRY_CODES = {503, 429}
 _CHUNK_SIZE = 20  # 每次推送的字符数，控制前端显示速度
 
 
@@ -40,11 +40,11 @@ class GeminiProvider(BaseProvider):
                 usage = response.usage_metadata
                 break
             except ServerError as e:
-                if e.status_code in _RETRY_STATUS_CODES:
+                if e.code in _RETRY_CODES:
                     wait = 2 ** attempt  # 1s, 2s, 4s
                     logger.warning(
                         'Gemini %s on attempt %d, retrying in %ds: %s',
-                        e.status_code, attempt + 1, wait, e,
+                        e.code, attempt + 1, wait, e,
                     )
                     time.sleep(wait)
                     last_error = e
