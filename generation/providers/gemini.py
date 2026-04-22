@@ -28,7 +28,7 @@ class GeminiProvider(BaseProvider):
         )
 
         last_error = None
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 response = client.models.generate_content(
                     model=self.MODEL,
@@ -40,7 +40,7 @@ class GeminiProvider(BaseProvider):
                 break
             except ServerError as e:
                 if e.code in _RETRY_CODES:
-                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    wait = min(2 ** attempt, 8)  # 1, 2, 4, 8, 8s，上限 8s
                     logger.warning(
                         'Gemini %s on attempt %d, retrying in %ds: %s',
                         e.code, attempt + 1, wait, e,
@@ -70,7 +70,7 @@ class GeminiProvider(BaseProvider):
         )
 
         last_error = None
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 response = client.models.generate_content(
                     model=self.MODEL,
@@ -86,7 +86,7 @@ class GeminiProvider(BaseProvider):
                 )
             except ServerError as e:
                 if e.code in _RETRY_CODES:
-                    wait = 2 ** attempt
+                    wait = min(2 ** attempt, 8)  # 1, 2, 4, 8, 8s，上限 8s
                     logger.warning(
                         'Gemini %s on attempt %d, retrying in %ds: %s',
                         e.code, attempt + 1, wait, e,
