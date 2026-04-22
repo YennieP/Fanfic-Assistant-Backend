@@ -18,6 +18,35 @@ from .prompt import build_judge_prompt
 logger = logging.getLogger(__name__)
 
 
+def _parse_judge_response(result_text: str) -> tuple[int, str]:
+    """
+    解析 judge 返回的 JSON，兼容以下情况：
+    1. 正常 JSON
+    2. JSON 外层包了 markdown 代码块（```json ... ```）
+    3. reasoning 字段包含字面换行符（违反 JSON 规范）
+    """
+    # 去掉 markdown 代码块包装
+    clean = re.sub(r'```(?:json)?\s*|\s*```', '', result_text).strip()
+
+    # 第一次尝试：直接解析
+    try:
+        result = json.loads(clean)
+    except json.JSONDecodeError:
+        # 第二次尝试：将字符串值内的字面换行符转义后再解析
+        # 只替换 JSON 字符串值内部的换行，不影响结构
+        clean_escaped = re.sub(r'(?<!\\)\n', r'\\n', clean)
+        result = json.loads(clean_escaped)
+
+    score = int(result['score'])
+    # 还原 reasoning 里被转义的换行（用于展示）
+    reasoning = str(result['reasoning']).replace('\\n', '\n').strip()
+
+    if not 0 <= score <= 10:
+        raise ValueError(f'score {score} out of range')
+
+    return score, reasoning
+
+
 class EvaluateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -66,7 +95,7 @@ class EvaluateView(APIView):
 
         system_prompt, user_prompt = build_judge_prompt(character, au_mod, generated_text)
 
-        # 为 judge 调用分配唯一 id，sync=True 保证返回时已落库，之后可按 id 查到
+        # 为 judge 调用分配唯一 id，sync=True 保证返回时已落库
         judge_id = uuid.uuid4()
 
         @log_llm_call(feature='consistency_check', sync=True)
@@ -79,19 +108,9 @@ class EvaluateView(APIView):
             logger.exception('Judge LLM call failed')
             return Response({'error': f'评估调用失败：{str(e)}'}, status=500)
 
-        # 解析 JSON，兼容模型误加 markdown 代码块的情况
+        # 解析 judge 返回的 JSON
         try:
-            clean = re.sub(r'```(?:json)?\s*|\s*```', '', result_text).strip()
-            try:
-                result = json.loads(clean)
-            except json.JSONDecodeError:
-                # 兼容 reasoning 字段包含字面换行符的情况
-                clean = re.sub(r'(?<!\\)\n', '\\n', clean)
-                result = json.loads(clean)
-            score = int(result['score'])
-            reasoning = str(result['reasoning']).replace('\\n', '\n')
-            if not 0 <= score <= 10:
-                raise ValueError(f'score {score} out of range')
+            score, reasoning = _parse_judge_response(result_text)
         except Exception:
             logger.error('Judge returned invalid response: %s', result_text)
             return Response({'error': '评估结果格式异常，请重试'}, status=500)
