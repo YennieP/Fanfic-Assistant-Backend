@@ -82,9 +82,14 @@ class EvaluateView(APIView):
         # 解析 JSON，兼容模型误加 markdown 代码块的情况
         try:
             clean = re.sub(r'```(?:json)?\s*|\s*```', '', result_text).strip()
-            result = json.loads(clean)
+            try:
+                result = json.loads(clean)
+            except json.JSONDecodeError:
+                # 兼容 reasoning 字段包含字面换行符的情况
+                clean = re.sub(r'(?<!\\)\n', '\\n', clean)
+                result = json.loads(clean)
             score = int(result['score'])
-            reasoning = str(result['reasoning'])
+            reasoning = str(result['reasoning']).replace('\\n', '\n')
             if not 0 <= score <= 10:
                 raise ValueError(f'score {score} out of range')
         except Exception:
