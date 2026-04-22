@@ -13,7 +13,7 @@ class GeminiProvider(BaseProvider):
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=2000,
+                max_output_tokens=4000,
             ),
         )
         last_usage = None
