@@ -15,6 +15,20 @@
 
 ---
 
+## Phase 1 Experiment Results
+
+A 3-group × 5-scene controlled experiment quantified the character card system's impact on character consistency (LLM-as-judge, 0–10 scale). Full report: [EXPERIMENT.md](./EXPERIMENT.md)
+
+| Group | Description | Avg Score |
+|---|---|---|
+| Control A | No character information | 7.8 |
+| Control B | Natural language character summary (2–3 sentences) | 8.4 |
+| **Experimental** | **Full structured character card system** | **9.8** |
+
+Key finding: in scenes requiring fine-grained behavioral patterns (e.g. the "switch mechanism" — fully letting loose in entertainment contexts), Control A and B both scored 2/10 while the character card system scored 9/10.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -62,9 +76,9 @@ fanfic-assistant-backend/
     migrations/
   generation/
     providers/
-      base.py         # Abstract base class + UsageInfo dataclass
+      base.py         # Abstract base class + UsageInfo dataclass + CompleteResult dataclass
       anthropic.py    # Anthropic Claude implementation
-      gemini.py       # Google Gemini implementation
+      gemini.py       # Google Gemini implementation (buffered non-streaming + 5-attempt retry)
     prompt.py         # Character card → prompt builder
                       # system prompt: injects gender pronoun instruction (unified throughout, must not be violated)
                       # user prompt: injects full scene fields (secondary characters, scene role, target state, desired length, scene restrictions)
@@ -77,6 +91,7 @@ fanfic-assistant-backend/
     urls.py            # Routing for evaluation-related API endpoints
     admin.py           # Admin dashboard configuration (daily metrics and average score analytics)
     migrations/        # Database schema evolution files
+  EXPERIMENT.md        # Phase 1 experiment methodology and results
   .env
   requirements.txt
   manage.py
@@ -308,7 +323,7 @@ generation/
   providers/
     base.py       # Abstract Base Classes + UsageInfo dataclass + CompleteResult dataclass
     anthropic.py  # claude-sonnet-4-20250514
-    gemini.py     # gemini-2.5-flash
+    gemini.py     # gemini-2.5-flash (buffered non-streaming + 5-attempt retry)
   prompt.py       # Character card → system/user prompt construction
   views.py        # POST /api/generate/stream/ SSE endpoint
 ```
@@ -316,6 +331,8 @@ generation/
 **LlmCallLog is integrated into the generation pipeline.** Latency, token usage, and success/failure for every LLM call are automatically recorded via `@log_llm_call(feature="character_generate")`.
 
 Implementation: providers yield a `UsageInfo` sentinel after all text chunks; the decorator wraps the generator, transparently passes text chunks, captures `UsageInfo`, and writes `LlmCallLog` after iteration completes. The view layer and frontend are unaware of `UsageInfo`. `@log_llm_call` supports a `sync=True` parameter: the generation call uses this to write `LlmCallLog` synchronously after the last chunk and before the `done` event (~5ms), guaranteeing the record exists when the frontend receives `generationId`. The `complete()` method is used for non-streaming calls (e.g. the judge) and also supports `sync=True`.
+
+**Gemini reliability**: the Gemini provider uses non-streaming `generate_content` internally (buffered), with 5-attempt exponential backoff (1s, 2s, 4s, 4s, 4s) on 503/429 errors. Content is delivered to the frontend as pseudo-streaming after the full response is received, eliminating mid-stream truncation from server overload. gunicorn worker timeout is set to 60s.
 
 ---
 
@@ -377,8 +394,11 @@ ENCRYPTION_KEY=<generate with Fernet.generate_key()>
 | AUMod `inherit_exclude` field | ✅ Done | Field complete; UI pending |
 | LlmCallLog in generation pipeline | ✅ Done | `generation_id` field added; `sync=True` path for streaming |
 | LLM-as-judge consistency evaluation | ✅ Done | `evaluation/` app; 0–10 integer score; `generation_id` links full chain |
-| TAXONOMY backend storage | ⚠️ Pending | Before writing UI |
-| Vector database integration | ❌ Pending | Required before Phase 2 |
+| Phase 1 experiment | ✅ Done | See EXPERIMENT.md; Experimental avg 9.8 vs Control B 8.4 vs Control A 7.8 |
+| Gemini reliability | ✅ Done | Buffered non-streaming + 5-attempt retry + gunicorn timeout 60s |
+| TAXONOMY backend storage | ⚠️ Pending | Before writing Relationship UI |
+| Vector database (pgvector) | ⚠️ Pending Phase 2 | Selected: pgvector on existing PostgreSQL; see design doc for rationale |
+| Relationship entity frontend UI | ⚠️ Pending | Backend complete |
 | Celery + Redis async queue | ⚠️ Deferred | Re-evaluate at Phase 2 |
 
 ---
@@ -387,9 +407,11 @@ ENCRYPTION_KEY=<generate with Fernet.generate_key()>
 
 - [ ] Relationship entity frontend UI (backend complete)
 - [ ] TAXONOMY global tag table backend storage
-- [ ] Example library API (depends on vector database)
-- [ ] Vector database integration (pgvector / Chroma / Qdrant)
+- [ ] Example library API (depends on pgvector, planned for Phase 2)
+- [ ] pgvector integration (selected over Qdrant; see design doc for rationale)
 - [ ] Celery + Redis async queue (deferred to Phase 2 evaluation)
+- [x] Phase 1 experiment — baseline vs. character card comparison (see EXPERIMENT.md)
+- [x] Gemini reliability — buffered non-streaming with 5-attempt exponential backoff retry
 - [x] LLM-as-judge consistency evaluation (evaluation/ app, integrated in writing page, ConsistencyScore persisted)
 - [x] `@log_llm_call` decorator integrated into generation pipeline (sync=True path + generation_id field)
 
@@ -415,6 +437,20 @@ Target Role: Applied ML Engineer — Generative AI / Content AI
 
 - 前端仓库：[Fanfic-Assistant](https://github.com/YennieP/Fanfic-Assistant)
 - 移动端仓库：[Fanfic-Assistant-Mobile](https://github.com/YennieP/Fanfic-Assistant-Mobile)
+
+---
+
+## Phase 1 实验结论
+
+通过 3 组 × 5 场景的对照实验，量化了角色卡系统对角色一致性的提升效果（LLM-as-judge，0-10 分）。完整报告见 [EXPERIMENT.md](./EXPERIMENT.md)。
+
+| 组别 | 说明 | 平均分 |
+|---|---|---|
+| Control A | 零角色信息 | 7.8 |
+| Control B | 自然语言角色简介（2-3 句话） | 8.4 |
+| **Experimental** | **完整结构化角色卡系统** | **9.8** |
+
+核心发现：在需要细粒度行为模式的场景（如"开关机制"——进入娱乐状态时完全放开成为气氛核心），Control A/B 均只有 2 分，角色卡系统达到 9 分。
 
 ---
 
@@ -467,8 +503,10 @@ fanfic-assistant-backend/
     providers/
       base.py         # 抽象基类 + UsageInfo dataclass + CompleteResult dataclass
       anthropic.py    # Anthropic Claude 实现
-      gemini.py       # Google Gemini 实现
+      gemini.py       # Google Gemini 实现（缓冲非流式 + 5 次重试）
     prompt.py         # 角色卡 → prompt 构建逻辑
+                      # system prompt 注入性别代词指令（全文统一，不得违反）
+                      # user prompt 注入完整场景字段（含次要角色、场景作用、目标状态、篇幅、禁止项）
     views.py          # SSE streaming endpoint
     urls.py
   evaluation/
@@ -478,6 +516,7 @@ fanfic-assistant-backend/
     urls.py
     admin.py          # Admin dashboard（今日评估数量 + 平均分）
     migrations/
+  EXPERIMENT.md        # Phase 1 实验方法论与结果
   .env
   requirements.txt
   manage.py
@@ -709,7 +748,7 @@ generation/
   providers/
     base.py       # 抽象基类 BaseProvider + UsageInfo dataclass
     anthropic.py  # claude-sonnet-4-20250514
-    gemini.py     # gemini-2.5-flash
+    gemini.py     # gemini-2.5-flash（缓冲非流式 + 5 次指数退避重试）
   prompt.py       # 角色卡 → system/user prompt 构建
                   # system prompt 注入性别代词指令（全文统一，不得违反）
                   # user prompt 注入完整场景字段（含次要角色、场景作用、目标状态、篇幅、禁止项）
@@ -719,6 +758,8 @@ generation/
 **LlmCallLog 已接入生成 pipeline。** 每次 LLM 调用的 latency、token 用量、成功/失败均通过 `@log_llm_call(feature="character_generate")` 自动记录。
 
 实现机制：provider 在所有文字 chunk yield 完后，最后 yield 一个 `UsageInfo` sentinel；decorator 包装整个 generator，透传文字 chunk，捕获 `UsageInfo`，迭代结束后写入 `LlmCallLog`。view 层和前端均不感知 `UsageInfo` 的存在。`@log_llm_call` 支持 `sync=True` 参数：生成调用使用此参数，在最后一个 chunk yield 之后、`done` 事件发出之前同步写库（~5ms），保证前端收到 `generationId` 时记录已落库。`complete()` 方法供非流式调用（如评估 judge）使用，同样支持 `sync=True`。
+
+**Gemini 稳定性**：Gemini provider 内部使用非流式 `generate_content`（缓冲模式），在 503/429 错误时最多重试 5 次（指数退避：1s、2s、4s、4s、4s），拿到完整内容后再伪流式推送给前端，彻底消除因服务器过载导致的中途截断问题。gunicorn worker timeout 设为 60s。
 
 ---
 
@@ -780,8 +821,11 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 | AUMod `inherit_exclude` 字段缺失 | ✅ 已修正（字段已加，前端继承选择 UI 待实现）| — |
 | LlmCallLog 接入生成 pipeline | ✅ 已完成 | 新增 `generation_id` 字段 + `sync=True` 同步写库路径 |
 | LLM-as-judge 一致性评估 | ✅ 已完成 | `evaluation/` app；0-10 整数评分；`generation_id` 串联完整链路 |
-| TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写作界面开发前 |
-| 向量数据库选型接入 | ❌ 待修正 | Phase 2 前（必须）|
+| Phase 1 对比实验 | ✅ 已完成 | 见 EXPERIMENT.md；Experimental 均分 9.8 vs Control B 8.4 vs Control A 7.8 |
+| Gemini 生成稳定性 | ✅ 已完成 | 缓冲非流式 + 5 次重试 + gunicorn timeout 60s |
+| TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写 Relationship 前端 UI 前必须完成 |
+| 向量数据库选型接入 | ⚠️ Phase 2 | 已选型：pgvector（现有 PostgreSQL 加扩展）；详见设计文档 |
+| 关系实体前端 UI | ⚠️ 待实现 | 后端已完整 |
 | Celery + Redis 异步队列 | ⚠️ 已延期 | Phase 2 前按需评估 |
 
 ---
@@ -790,9 +834,11 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 
 - [ ] 关系实体前端 UI（model 已就绪，API 端点已完成）
 - [ ] TAXONOMY 全局标签表后端存储
-- [ ] 示例库 API（台词示例片段，依赖向量数据库）
-- [ ] 向量数据库选型接入（pgvector / Chroma / Qdrant）
+- [ ] 示例库 API（台词示例片段，依赖 pgvector，规划于 Phase 2）
+- [ ] pgvector 接入（已选型，详见设计文档）
 - [ ] Celery + Redis 异步队列（延期至 Phase 2 评估）
+- [x] Phase 1 对比实验（baseline vs. 角色卡，见 EXPERIMENT.md）
+- [x] Gemini 稳定性修复（缓冲非流式 + 5 次指数退避重试）
 - [x] LLM-as-judge 一致性评估（evaluation/ app，前端写作页集成，ConsistencyScore 落库）
 - [x] `@log_llm_call` decorator 接入生成 pipeline（含 sync=True 路径 + generation_id 字段）
 
