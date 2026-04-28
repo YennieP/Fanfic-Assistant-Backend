@@ -86,7 +86,7 @@ class GeminiProvider(BaseProvider):
                 )
             except ServerError as e:
                 if e.code in _RETRY_CODES:
-                    wait = min(2 ** attempt, 8)  # 1, 2, 4, 8, 8s，上限 8s
+                    wait = min(2 ** attempt, 4)  # 1, 2, 4, 8, 8s，上限 8s
                     logger.warning(
                         'Gemini %s on attempt %d, retrying in %ds: %s',
                         e.code, attempt + 1, wait, e,
