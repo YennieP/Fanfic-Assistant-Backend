@@ -1,10 +1,13 @@
 from rest_framework import viewsets, permissions
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
 from .models import BaseCard, AUMod, Relationship, RelationshipMembership
 from .serializers import (
     BaseCardSerializer, BaseCardListSerializer,
     AUModSerializer,
     RelationshipSerializer, RelationshipMembershipSerializer,
 )
+from core.taxonomy import TAXONOMY
 
 
 class BaseCardViewSet(viewsets.ModelViewSet):
@@ -43,12 +46,12 @@ class AUModViewSet(viewsets.ModelViewSet):
 
 class RelationshipViewSet(viewsets.ModelViewSet):
     """
-    Fix 1: 关系实体独立 CRUD。
-    GET  /api/relationships/          — 列出当前用户的所有关系实体
-    POST /api/relationships/          — 创建，body: {overall_tone, participant_ids: [uuid, uuid]}
-    GET  /api/relationships/{id}/     — 详情（含 memberships）
-    PATCH /api/relationships/{id}/    — 更新 overall_tone
-    DELETE /api/relationships/{id}/   — 删除
+    关系实体独立 CRUD。
+    GET    /api/relationships/       — 列出当前用户的所有关系实体
+    POST   /api/relationships/       — 创建，body: {overall_tone, participant_ids: [uuid, uuid]}
+    GET    /api/relationships/{id}/  — 详情（含 memberships）
+    PATCH  /api/relationships/{id}/  — 更新 overall_tone
+    DELETE /api/relationships/{id}/  — 删除
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = RelationshipSerializer
@@ -67,9 +70,9 @@ class RelationshipMembershipViewSet(viewsets.ModelViewSet):
     每个参与者的 member mod 编辑。
     只允许 GET 和 PATCH——membership 随关系实体创建/删除，不单独新建或删除。
 
-    GET   /api/relationships/{id}/memberships/          — 列出所有参与者 mod
-    GET   /api/relationships/{id}/memberships/{id}/     — 单个参与者 mod 详情
-    PATCH /api/relationships/{id}/memberships/{id}/     — 更新参与者 mod
+    GET   /api/relationships/{id}/memberships/        — 列出所有参与者 mod
+    GET   /api/relationships/{id}/memberships/{id}/   — 单个参与者 mod 详情
+    PATCH /api/relationships/{id}/memberships/{id}/   — 更新参与者 mod
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = RelationshipMembershipSerializer
@@ -80,3 +83,15 @@ class RelationshipMembershipViewSet(viewsets.ModelViewSet):
             relationship__owner=self.request.user,
             relationship_id=self.kwargs['relationship_pk']
         ).select_related('character')
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def taxonomy_view(request):
+    """
+    GET /api/taxonomy/
+    返回系统全局标签表。用于前端渲染预设标签选项。
+    Phase 2 Example Library A 片段标注使用相同 schema。
+    camel-case middleware 自动转换 key：scene_type → sceneType 等。
+    """
+    return Response(TAXONOMY)
