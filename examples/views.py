@@ -110,10 +110,17 @@ class ArticleSegmentView(APIView):
             segments = segment_article(article.content, provider)
         except Exception as e:
             logger.exception('Article segmentation failed')
-            return Response({'error': f'切割失败：{str(e)}'}, status=500)
+            err_str = str(e)
+            if '503' in err_str or 'UNAVAILABLE' in err_str:
+                return Response({
+                    'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'
+                }, status=503)
+            return Response({'error': f'切割失败：{err_str}'}, status=500)
 
         if not segments:
-            return Response({'error': '切割结果为空，请检查文章内容'}, status=400)
+            return Response({
+                'error': 'Gemini 返回了空结果，可能是负载过高，请稍后重试'
+            }, status=503)
 
         fragments = [
             Fragment.objects.create(
