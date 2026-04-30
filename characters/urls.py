@@ -4,6 +4,7 @@ from .views import (
     BaseCardViewSet, AUModViewSet,
     RelationshipViewSet, RelationshipMembershipViewSet,
     taxonomy_view,
+    LabelHistoryView,
 )
 
 router = routers.DefaultRouter()
@@ -21,4 +22,5 @@ urlpatterns = [
     path('', include(characters_router.urls)),
     path('', include(relationships_router.urls)),
     path('taxonomy/', taxonomy_view, name='taxonomy'),
+    path('label-history/', LabelHistoryView.as_view(), name='label-history'),
 ]

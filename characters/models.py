@@ -141,3 +141,21 @@ class RelationshipMembership(models.Model):
 
     def __str__(self):
         return f'{self.character.name} in Relationship({self.relationship_id})'
+    
+class LabelHistory(models.Model):
+    """
+    用户在各字段输入过的历史标签，用于 autocomplete 建议。
+    field_type 区分不同字段（如 relationship-quickLabels）。
+    同一用户+字段+标签组合唯一，used_at 记录最近使用时间。
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='label_histories')
+    field_type = models.CharField(max_length=100)
+    label = models.CharField(max_length=200)
+    used_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['user', 'field_type', 'label']]
+        ordering = ['-used_at']
+
+    def __str__(self):
+        return f'{self.user.username} / {self.field_type} / {self.label}'

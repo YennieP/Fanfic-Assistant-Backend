@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import BaseCard, AUMod, Relationship, RelationshipMembership
+from .models import BaseCard, AUMod, Relationship, RelationshipMembership, LabelHistory
 
 
 class AUModSerializer(serializers.ModelSerializer):
@@ -108,3 +109,10 @@ class BaseCardListSerializer(serializers.ModelSerializer):
             'quick_labels', 'au_mods',
             'created_at', 'updated_at',
         ]
+
+
+class LabelHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LabelHistory
+        fields = ['id', 'field_type', 'label', 'used_at']
+        read_only_fields = ['id', 'used_at']

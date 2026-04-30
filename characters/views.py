@@ -8,6 +8,14 @@ from .serializers import (
     RelationshipSerializer, RelationshipMembershipSerializer,
 )
 from core.taxonomy import TAXONOMY
+from .models import BaseCard, AUMod, Relationship, RelationshipMembership, LabelHistory
+from .serializers import (
+    BaseCardSerializer, BaseCardListSerializer,
+    AUModSerializer,
+    RelationshipSerializer, RelationshipMembershipSerializer,
+    LabelHistorySerializer,
+)
+from rest_framework.views import APIView
 
 
 class BaseCardViewSet(viewsets.ModelViewSet):
@@ -95,3 +103,40 @@ def taxonomy_view(request):
     camel-case middleware 自动转换 key：scene_type → sceneType 等。
     """
     return Response(TAXONOMY)
+
+class LabelHistoryView(APIView):
+    """
+    GET  /api/label-history/?field_type=relationship-quickLabels
+         返回当前用户该字段的历史标签，按最近使用时间倒序，最多 100 条
+
+    POST /api/label-history/
+         body: { fieldType, label }
+         新增或更新（upsert）一条历史标签，used_at 自动刷新
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        field_type = request.query_params.get('field_type', '')
+        qs = LabelHistory.objects.filter(
+            user=request.user,
+            field_type=field_type,
+        )[:100]
+        return Response(LabelHistorySerializer(qs, many=True).data)
+
+    def post(self, request):
+        field_type = request.data.get('fieldType', '').strip()
+        label = request.data.get('label', '').strip()
+        if not field_type or not label:
+            return Response(
+                {'error': 'fieldType and label are required'},
+                status=400
+            )
+        obj, _ = LabelHistory.objects.update_or_create(
+            user=request.user,
+            field_type=field_type,
+            label=label,
+            defaults={},   # used_at 由 auto_now 自动刷新
+        )
+        # auto_now 在 update_or_create 里不会自动触发，需要显式 save
+        obj.save()
+        return Response(LabelHistorySerializer(obj).data)
