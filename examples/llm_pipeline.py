@@ -155,8 +155,7 @@ def _parse_json(text: str) -> dict:
     if not text:
         return {}
     text = text.strip()
-    
-    text = text.strip()
+    # 去除 markdown 代码块
     text = re.sub(r'^```(?:json)?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
     text = text.strip()
@@ -164,7 +163,14 @@ def _parse_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # 输出被截断时，尝试找到最后一个完整的字符串元素并补全
+        # LLM 在 JSON 前后加了自然语言文字 → 提取花括号内容重试
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        # segments 截断修复（保持原有逻辑）
         last_complete = text.rfind('",')
         if last_complete != -1:
             truncated = text[:last_complete + 1]
