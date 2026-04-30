@@ -144,7 +144,9 @@ def infer_tags(fragment_text: str, provider) -> dict:
         user_prompt=f'请为以下片段打标签：\n\n{fragment_text}',
         max_tokens=1000,
     )
+    logger.info('[infer_tags] raw LLM output: %s', result.text)
     raw = _parse_json(result.text)
+    logger.info('[infer_tags] parsed result: %s', raw)  
     return _clean_tags(raw)
 
 
