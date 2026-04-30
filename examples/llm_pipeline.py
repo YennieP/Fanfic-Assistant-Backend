@@ -17,80 +17,80 @@ MAX_CHARS_PER_CHUNK = 2000
 # ── Segmentation ────────────────────────────────────────────────────────────
 
 SEGMENTATION_SYSTEM_PROMPT = """你是一个专业的同人文分析助手。
-你的任务是将用户提供的文章切割成情节片段。
+你的任务是将用户提供的文章按情节切割，返回每个片段的起止行号。
 
 【切割规则】
-- 每个片段是一个"情节场景单元"，不是自然段
-- 按情节的完整性和情感弧度切割，不按空行机械分段
-- 一个情节片段可包含多个自然段（叙述+对话+心理描写可以在同一片段内）
-- 每个片段应包含完整的一个情节动作或情感转变
-- 片段长度通常在 50-400 字之间
-- 不要修改原文任何字符，原文切割后拼接应等于原文
+- 每个片段是一个"情节场景单元"，按情节完整性和情感弧度切割
+- 一个情节片段可包含多个自然段
+- 行号从 0 开始计数
+- start 和 end 均为包含关系（end 行也属于该片段）
 
 【返回格式】
 严格返回 JSON，不要 markdown 代码块，不要任何解释：
-{"segments": ["片段1完整原文", "片段2完整原文", ...]}"""
-
-
-def _split_content(content: str, max_chars: int = MAX_CHARS_PER_CHUNK) -> list[str]:
-    """
-    按段落边界切分长文章，每块不超过 max_chars 字符。
-    段落分隔符为一个或多个空行（\n\n+）。
-    保证段落完整性，不在段落中间截断。
-    """
-    # 按一个或多个空行分割段落
-    paragraphs = re.split(r'\n{2,}', content)
-    paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
-    # 如果文章没有空行，退化为按字符数硬切（每块不超过 max_chars）
-    if len(paragraphs) <= 1:
-        chunks = []
-        for i in range(0, len(content), max_chars):
-            chunks.append(content[i:i + max_chars])
-        return chunks
-
-    chunks = []
-    current: list[str] = []
-    current_len = 0
-
-    for para in paragraphs:
-        if current_len + len(para) > max_chars and current:
-            chunks.append('\n\n'.join(current))
-            current = [para]
-            current_len = len(para)
-        else:
-            current.append(para)
-            current_len += len(para)
-
-    if current:
-        chunks.append('\n\n'.join(current))
-
-    return chunks or [content]
+{"segments": [{"start": 0, "end": 5}, {"start": 6, "end": 12}, ...]}"""
 
 
 def segment_article(article_content: str, provider) -> list[str]:
     """
-    使用 LLM 将文章切割成情节片段。
-    长文章自动分块处理，每块独立切割后合并结果。
-    每块使用 max_tokens=4000 避免截断。
+    让 LLM 返回行号边界，后端自己切原文。
+    输出 token 从 8000+ 降至约 200，彻底避免截断和 503。
     """
-    chunks = _split_content(article_content)
-    all_segments = []
+    lines = article_content.splitlines()
+    # 给每行加行号方便 LLM 定位
+    numbered = '\n'.join(f'{i}: {line}' for i, line in enumerate(lines))
 
-    for i, chunk in enumerate(chunks):
+    chunks = _split_numbered_lines(numbered)
+    all_segments = []
+    line_offset = 0
+
+    for i, (chunk_text, chunk_line_count) in enumerate(chunks):
         result = provider.complete(
             system_prompt=SEGMENTATION_SYSTEM_PROMPT,
-            user_prompt=f'请将以下文章切割成情节片段：\n\n{chunk}',
-            max_tokens=4000,
+            user_prompt=f'请切割以下文章（行号已标注）：\n\n{chunk_text}',
+            max_tokens=800,   # 只返回行号，800 token 绰绰有余
         )
         if not result.text:
             logger.warning('Segment chunk %d returned empty response, skipping', i)
+            line_offset += chunk_line_count
             continue
+
         data = _parse_json(result.text)
-        segments = data.get('segments', [])
-        all_segments.extend([s.strip() for s in segments if s.strip()])
+        for seg in data.get('segments', []):
+            start = seg.get('start', 0) + line_offset
+            end = seg.get('end', start) + line_offset
+            # 按行号切原文
+            fragment_lines = lines[start:end + 1]
+            text = '\n'.join(fragment_lines).strip()
+            if text:
+                all_segments.append(text)
+
+        line_offset += chunk_line_count
 
     return all_segments
+
+def _split_numbered_lines(numbered_text: str, max_chars: int = 3000) -> list[tuple[str, int]]:
+    """
+    按字符数切分带行号的文本。
+    返回 (chunk_text, 该块包含的行数) 的列表。
+    """
+    all_lines = numbered_text.split('\n')
+    chunks = []
+    current_lines = []
+    current_len = 0
+
+    for line in all_lines:
+        if current_len + len(line) > max_chars and current_lines:
+            chunks.append(('\n'.join(current_lines), len(current_lines)))
+            current_lines = [line]
+            current_len = len(line)
+        else:
+            current_lines.append(line)
+            current_len += len(line)
+
+    if current_lines:
+        chunks.append(('\n'.join(current_lines), len(current_lines)))
+
+    return chunks or [(numbered_text, len(all_lines))]
 
 
 # ── Tag Inference ────────────────────────────────────────────────────────────
