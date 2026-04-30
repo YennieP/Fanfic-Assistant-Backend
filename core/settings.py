@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'logs',
     'generation',
     'evaluation',
+    'examples',
 ]
 
 MIDDLEWARE = [

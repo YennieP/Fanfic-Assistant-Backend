@@ -25,6 +25,56 @@ def _is_rate_limited(user_id: int, rate: int = 10, period: int = 60) -> bool:
     return False
 
 
+def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_config, limit: int = 3) -> list:
+    """
+    从 pgvector 检索与当前场景最相似的风格示例片段。
+
+    MVP 约束：向量化使用 Gemini text-embedding-004，仅当用户配置 Gemini 时生效。
+    降级策略：Anthropic 用户跳过注入，生成正常进行（不报错）。
+    Phase 3 升级路径：在此函数中新增 content_embedding 的加权合并逻辑即可。
+    """
+    # 仅在 Gemini 配置下支持向量检索
+    if llm_config.provider != 'gemini':
+        return []
+
+    try:
+        from examples.models import Fragment
+        from examples.embedding import get_embedding, scene_to_text
+        from pgvector.django import CosineDistance
+
+        # 快速检查是否有已入库的片段，避免无效的 embedding API 调用
+        if not Fragment.objects.filter(
+            owner=user,
+            character=character,
+            is_confirmed=True,
+        ).exists():
+            return []
+
+        api_key = decrypt_key(llm_config.api_key_encrypted)
+        scene_text = scene_to_text(scene_input)
+        if not scene_text.strip():
+            return []
+
+        query_embedding = get_embedding(scene_text, api_key)
+
+        fragments = list(
+            Fragment.objects.filter(
+                owner=user,
+                character=character,
+                is_confirmed=True,
+                embedding__isnull=False,
+            ).order_by(
+                CosineDistance('embedding', query_embedding)
+            )[:limit]
+        )
+        return fragments
+
+    except Exception:
+        # 降级：任何检索错误不影响生成
+        logger.exception('Style fragment retrieval failed, proceeding without injection')
+        return []
+
+
 class GenerateStreamView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -87,11 +137,15 @@ class GenerateStreamView(APIView):
             else GeminiProvider(api_key)
         )
 
-        system_prompt, user_prompt = build_prompt(character, au_mod, scene_input)
+        # Phase 2：检索风格示例片段（Gemini 用户生效，Anthropic 用户返回空列表）
+        style_fragments = _get_style_fragments(
+            character, scene_input, request.user, llm_config
+        )
 
-        # 提前生成 generation_id，不依赖数据库操作。
-        # done 事件携带此 id 发给前端，前端用它触发评估请求。
-        # sync=True 保证 LlmCallLog 在 yield done 之前已落库，前端拿到 id 时可立即查询。
+        system_prompt, user_prompt = build_prompt(
+            character, au_mod, scene_input, style_fragments
+        )
+
         generation_id = uuid.uuid4()
 
         @log_llm_call(feature='character_generate', sync=True)
@@ -103,10 +157,12 @@ class GenerateStreamView(APIView):
                 for chunk in _get_stream(user=request.user, generation_id=generation_id):
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
-                # _get_stream 迭代结束 = _write_sync 已执行 = LlmCallLog 已落库
                 done_data = json.dumps({
                     'type': 'done',
                     'generationId': str(generation_id),
+                    # Phase 2：告知前端本次生成是否注入了风格示例
+                    'styleInjected': len(style_fragments) > 0,
+                    'styleFragmentCount': len(style_fragments),
                 })
                 yield f'data: {done_data}\n\n'
             except Exception as e:
