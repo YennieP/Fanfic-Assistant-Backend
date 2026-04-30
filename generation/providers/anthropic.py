@@ -23,11 +23,13 @@ class AnthropicProvider(BaseProvider):
             completion_tokens=final.usage.output_tokens,
         )
 
-    def complete(self, system_prompt: str, user_prompt: str) -> CompleteResult:
+    def complete(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
+    ) -> CompleteResult:
         client = anthropic_sdk.Anthropic(api_key=self.api_key)
         msg = client.messages.create(
             model=self.MODEL,
-            max_tokens=1000,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{'role': 'user', 'content': user_prompt}],
         )
