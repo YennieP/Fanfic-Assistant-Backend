@@ -36,6 +36,7 @@ Key finding: in scenes requiring fine-grained behavioral patterns (e.g. the "swi
 | Framework | Django 6 + Django REST Framework |
 | Auth | JWT (djangorestframework-simplejwt) |
 | Database | SQLite (dev) / PostgreSQL (prod) |
+| Vector DB | pgvector (PostgreSQL extension, Phase 2) |
 | LLM | Anthropic SDK / Google Gen AI SDK |
 | Encryption | cryptography (Fernet symmetric encryption) |
 | Async Logging | QueueHandler + QueueListener |
@@ -53,8 +54,9 @@ fanfic-assistant-backend/
     settings.py
     urls.py
     wsgi.py
+    taxonomy.py       # TAXONOMY global tag table (single source of truth for all preset tags)
   characters/
-    models.py         # BaseCard, AUMod, Relationship, RelationshipMembership
+    models.py         # BaseCard, AUMod, Relationship, RelationshipMembership, LabelHistory
     serializers.py
     views.py
     urls.py
@@ -248,6 +250,37 @@ Relationships are independent entities, not owned by any single character. They 
 
 ---
 
+### TAXONOMY
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/taxonomy/` | Return system-wide global tag table (read-only, requires auth) |
+
+Response keys are auto-converted to camelCase by middleware (`scene_type` → `sceneType`, etc.). No database table — served from `core/taxonomy.py`. Adding a new preset tag requires only editing that file; no migration needed.
+
+---
+
+### Label History
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/label-history/?field_type=xxx` | Get current user's label history for a specific field type |
+| POST | `/api/label-history/` | Add or refresh a label entry (upsert by user+field_type+label) |
+
+**POST request body:**
+```json
+{ "fieldType": "relationship-quickLabels", "label": "细心关照" }
+```
+
+**Response:**
+```json
+{ "id": "uuid", "fieldType": "relationship-quickLabels", "label": "细心关照", "usedAt": "2026-04-29T..." }
+```
+
+Label history is stored per-user per-field-type in the database (cross-device sync). `used_at` is refreshed on every POST, so suggestions are ranked by recency. Field types currently in use: `relationship-nicknames`, `relationship-quickLabels`, `relationship-forbiddenBehaviors`. Max 100 entries returned per field type, ordered by most recently used.
+
+---
+
 ## Data Models
 
 ### BaseCard
@@ -312,6 +345,18 @@ class UserLLMConfig(models.Model):
     user                     # OneToOneField → User
     provider                 # enum: anthropic / gemini
     api_key_encrypted        # Fernet encrypted, never returned in plaintext
+```
+
+### LabelHistory
+```python
+class LabelHistory(models.Model):
+    user                     # FK → User (per-user isolation)
+    field_type               # CharField — e.g. "relationship-quickLabels"
+    label                    # CharField — the label text
+    used_at                  # DateTimeField auto_now — refreshed on every POST
+                             # used for recency-ranked suggestions
+    # unique_together: (user, field_type, label)
+    # upsert via update_or_create + save() to trigger auto_now refresh
 ```
 
 ---
@@ -396,20 +441,25 @@ ENCRYPTION_KEY=<generate with Fernet.generate_key()>
 | LLM-as-judge consistency evaluation | ✅ Done | `evaluation/` app; 0–10 integer score; `generation_id` links full chain |
 | Phase 1 experiment | ✅ Done | See EXPERIMENT.md; Experimental avg 9.8 vs Control B 8.4 vs Control A 7.8 |
 | Gemini reliability | ✅ Done | Buffered non-streaming + 5-attempt retry + gunicorn timeout 60s |
-| TAXONOMY backend storage | ⚠️ Pending | Before writing Relationship UI |
+| TAXONOMY backend storage | ✅ Done | `core/taxonomy.py` + `GET /api/taxonomy/`; no DB table needed |
+| Relationship entity frontend UI | ✅ Done | List page (inline create) + detail page (inline membership editing) |
+| Label history autocomplete | ✅ Done | `LabelHistory` model; per-user DB storage; cross-device sync |
 | Vector database (pgvector) | ⚠️ Pending Phase 2 | Selected: pgvector on existing PostgreSQL; see design doc for rationale |
-| Relationship entity frontend UI | ⚠️ Pending | Backend complete |
+| Article + Fragment models (Phase 2) | ❌ Pending | Required before Example Library UI |
+| Example library API (Phase 2) | ❌ Pending | Depends on Fragment model + pgvector embedding |
 | Celery + Redis async queue | ⚠️ Deferred | Re-evaluate at Phase 2 |
 
 ---
 
 ## Pending Features
 
-- [ ] Relationship entity frontend UI (backend complete)
-- [ ] TAXONOMY global tag table backend storage
-- [ ] Example library API (depends on pgvector, planned for Phase 2)
-- [ ] pgvector integration (selected over Qdrant; see design doc for rationale)
+- [ ] Article + Fragment models (Phase 2 — Example Library A)
+- [ ] pgvector embedding pipeline (Phase 2)
+- [ ] Example library API (depends on Fragment model + pgvector)
 - [ ] Celery + Redis async queue (deferred to Phase 2 evaluation)
+- [x] TAXONOMY backend storage (`core/taxonomy.py` + `GET /api/taxonomy/`)
+- [x] Relationship entity frontend UI (list page + detail page with inline membership editing)
+- [x] Label history autocomplete (`LabelHistory` model, `GET/POST /api/label-history/`)
 - [x] Phase 1 experiment — baseline vs. character card comparison (see EXPERIMENT.md)
 - [x] Gemini reliability — buffered non-streaming with 5-attempt exponential backoff retry
 - [x] LLM-as-judge consistency evaluation (evaluation/ app, integrated in writing page, ConsistencyScore persisted)
@@ -461,6 +511,7 @@ Target Role: Applied ML Engineer — Generative AI / Content AI
 | 后端框架 | Django 6 + Django REST Framework |
 | 认证 | JWT（djangorestframework-simplejwt）|
 | 数据库 | SQLite（开发）/ PostgreSQL（生产）|
+| 向量数据库 | pgvector（PostgreSQL 扩展，Phase 2）|
 | LLM | Anthropic SDK / Google Gen AI SDK |
 | 加密 | cryptography（Fernet 对称加密）|
 | 异步日志 | QueueHandler + QueueListener |
@@ -478,8 +529,9 @@ fanfic-assistant-backend/
     settings.py
     urls.py
     wsgi.py
+    taxonomy.py       # TAXONOMY 全局标签表（所有预设标签的唯一来源，无需数据库）
   characters/
-    models.py         # BaseCard、AUMod、Relationship、RelationshipMembership
+    models.py         # BaseCard、AUMod、Relationship、RelationshipMembership、LabelHistory
     serializers.py
     views.py
     urls.py
@@ -673,6 +725,37 @@ data: {"type": "error", "message": "错误信息"}
 
 ---
 
+### TAXONOMY
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/taxonomy/` | 返回系统全局标签表（只读，需登录）|
+
+响应 key 由 camel-case 中间件自动转换（`scene_type` → `sceneType` 等）。无数据库表，直接从 `core/taxonomy.py` 提供。新增预设标签只需改此文件，无需迁移。
+
+---
+
+### 标签历史
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/label-history/?field_type=xxx` | 获取当前用户某字段的历史标签 |
+| POST | `/api/label-history/` | 新增或刷新历史标签（upsert） |
+
+**POST 请求体：**
+```json
+{ "fieldType": "relationship-quickLabels", "label": "细心关照" }
+```
+
+**响应体：**
+```json
+{ "id": "uuid", "fieldType": "relationship-quickLabels", "label": "细心关照", "usedAt": "2026-04-29T..." }
+```
+
+按用户+字段类型隔离存储，数据库持久化（支持跨设备同步）。每次 POST 刷新 `used_at`，建议按最近使用排序。当前字段类型：`relationship-nicknames`、`relationship-quickLabels`、`relationship-forbiddenBehaviors`。每次最多返回 100 条。
+
+---
+
 ## 数据模型
 
 ### BaseCard
@@ -737,6 +820,17 @@ class UserLLMConfig(models.Model):
     user                     # OneToOneField → User
     provider                 # 枚举：anthropic / gemini
     api_key_encrypted        # Fernet 加密存储，永不明文返回
+```
+
+### LabelHistory
+```python
+class LabelHistory(models.Model):
+    user        # FK → User（用户隔离）
+    field_type  # CharField — 字段类型，例：relationship-quickLabels
+    label       # CharField — 标签内容
+    used_at     # DateTimeField auto_now — 每次 POST 自动刷新，按最近使用排序建议
+    # unique_together: (user, field_type, label)
+    # POST 时 update_or_create + save() 触发 auto_now 刷新
 ```
 
 ---
@@ -823,20 +917,25 @@ ENCRYPTION_KEY=你用 Fernet.generate_key() 生成的密钥
 | LLM-as-judge 一致性评估 | ✅ 已完成 | `evaluation/` app；0-10 整数评分；`generation_id` 串联完整链路 |
 | Phase 1 对比实验 | ✅ 已完成 | 见 EXPERIMENT.md；Experimental 均分 9.8 vs Control B 8.4 vs Control A 7.8 |
 | Gemini 生成稳定性 | ✅ 已完成 | 缓冲非流式 + 5 次重试 + gunicorn timeout 60s |
-| TAXONOMY 全局标签表缺少后端存储 | ⚠️ 待修正 | 写 Relationship 前端 UI 前必须完成 |
+| TAXONOMY 全局标签表 | ✅ 已完成 | `core/taxonomy.py` + `GET /api/taxonomy/`，无需数据库 |
+| 关系实体前端 UI | ✅ 已完成 | 列表页（内联创建）+ 详情页（参与者设定内联编辑）|
+| 标签历史 autocomplete | ✅ 已完成 | `LabelHistory` model，数据库存储，跨设备同步 |
 | 向量数据库选型接入 | ⚠️ Phase 2 | 已选型：pgvector（现有 PostgreSQL 加扩展）；详见设计文档 |
-| 关系实体前端 UI | ⚠️ 待实现 | 后端已完整 |
+| Article + Fragment model（Phase 2）| ❌ 待实现 | 示例库 UI 前置依赖 |
+| 示例库 API（Phase 2）| ❌ 待实现 | 依赖 Fragment model + pgvector embedding |
 | Celery + Redis 异步队列 | ⚠️ 已延期 | Phase 2 前按需评估 |
 
 ---
 
 ## 待开发功能
 
-- [ ] 关系实体前端 UI（model 已就绪，API 端点已完成）
-- [ ] TAXONOMY 全局标签表后端存储
-- [ ] 示例库 API（台词示例片段，依赖 pgvector，规划于 Phase 2）
-- [ ] pgvector 接入（已选型，详见设计文档）
+- [ ] Article + Fragment model（Phase 2 — 示例库 A）
+- [ ] pgvector embedding pipeline（Phase 2）
+- [ ] 示例库 API（依赖 Fragment model + pgvector）
 - [ ] Celery + Redis 异步队列（延期至 Phase 2 评估）
+- [x] TAXONOMY 全局标签表（`core/taxonomy.py` + `GET /api/taxonomy/`）
+- [x] 关系实体前端 UI（列表页 + 详情页参与者设定内联编辑）
+- [x] 标签历史 autocomplete（`LabelHistory` model，`GET/POST /api/label-history/`）
 - [x] Phase 1 对比实验（baseline vs. 角色卡，见 EXPERIMENT.md）
 - [x] Gemini 稳定性修复（缓冲非流式 + 5 次指数退避重试）
 - [x] LLM-as-judge 一致性评估（evaluation/ app，前端写作页集成，ConsistencyScore 落库）
