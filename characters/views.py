@@ -124,7 +124,7 @@ class LabelHistoryView(APIView):
         return Response(LabelHistorySerializer(qs, many=True).data)
 
     def post(self, request):
-        field_type = request.data.get('fieldType', '').strip()
+        field_type = request.data.get('field_type', '').strip()
         label = request.data.get('label', '').strip()
         if not field_type or not label:
             return Response(
