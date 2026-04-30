@@ -3,8 +3,11 @@ LLM pipeline：文章情节切割 + TAXONOMY 标签推断。
 """
 import json
 import re
+import logging
 
 from core.taxonomy import TAXONOMY
+
+logger = logging.getLogger(__name__)
 
 # 每块最大字符数，按段落边界切分
 # 2000字/块 × 4000 output tokens 足够容纳切割结果
@@ -74,12 +77,15 @@ def segment_article(article_content: str, provider) -> list[str]:
     chunks = _split_content(article_content)
     all_segments = []
 
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         result = provider.complete(
             system_prompt=SEGMENTATION_SYSTEM_PROMPT,
             user_prompt=f'请将以下文章切割成情节片段：\n\n{chunk}',
             max_tokens=4000,
         )
+        if not result.text:
+            logger.warning('Segment chunk %d returned empty response, skipping', i)
+            continue
         data = _parse_json(result.text)
         segments = data.get('segments', [])
         all_segments.extend([s.strip() for s in segments if s.strip()])
@@ -146,6 +152,10 @@ def infer_tags(fragment_text: str, provider) -> dict:
 
 def _parse_json(text: str) -> dict:
     """去除 markdown 代码块标记后解析 JSON，截断时尝试修复。"""
+    if not text:
+        return {}
+    text = text.strip()
+    
     text = text.strip()
     text = re.sub(r'^```(?:json)?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
