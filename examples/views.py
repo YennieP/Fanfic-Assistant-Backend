@@ -152,21 +152,17 @@ class ArticleBatchConfirmView(APIView):
     def post(self, request, article_id):
         article = get_object_or_404(Article, id=article_id, owner=request.user)
 
+        from users.models import UserProviderKey
         try:
-            llm_config = _get_llm_config(request.user)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
-        if llm_config.provider != 'gemini':
+            gemini_key_obj = UserProviderKey.objects.get(
+                user=request.user, provider='gemini'
+            )
+            api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
+        except UserProviderKey.DoesNotExist:
             return Response({
-                'error': (
-                    '向量化需要 Gemini API Key。'
-                    '请在设置页将 provider 切换为 Gemini，完成入库后可切换回 Anthropic。'
-                    '已入库的向量不受影响。'
-                )
+                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
             }, status=400)
 
-        api_key = decrypt_key(llm_config.api_key_encrypted)
         to_confirm = article.fragments.filter(is_confirmed=False).exclude(tags={})
 
         confirmed_ids = []
@@ -190,8 +186,7 @@ class ArticleBatchConfirmView(APIView):
             'errors': len(error_ids),
             'error_ids': error_ids,
         })
-
-
+    
 # ── Fragment endpoints ────────────────────────────────────────────────────────
 
 class FragmentListView(APIView):
@@ -273,21 +268,18 @@ class FragmentConfirmView(APIView):
         if not fragment.tags:
             return Response({'error': '请先为片段打标签再确认入库'}, status=400)
 
+        from users.models import UserProviderKey
         try:
-            llm_config = _get_llm_config(request.user)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
-        if llm_config.provider != 'gemini':
+            gemini_key_obj = UserProviderKey.objects.get(
+                user=request.user, provider='gemini'
+            )
+            api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
+        except UserProviderKey.DoesNotExist:
             return Response({
-                'error': (
-                    '向量化需要 Gemini API Key。'
-                    '请在设置页切换为 Gemini 后重试。'
-                )
+                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
             }, status=400)
 
         try:
-            api_key = decrypt_key(llm_config.api_key_encrypted)
             tag_text = tags_to_text(fragment.tags)
             if not tag_text:
                 return Response({'error': '标签内容为空，无法向量化'}, status=400)
