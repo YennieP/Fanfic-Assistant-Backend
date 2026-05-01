@@ -12,25 +12,31 @@ from .embedding import get_embedding, tags_to_text
 from .llm_pipeline import segment_article, infer_tags
 from generation.providers.anthropic import AnthropicProvider
 from generation.providers.gemini import GeminiProvider
+from generation.providers.groq import GroqProvider
 
 logger = logging.getLogger(__name__)
 
 
 def _get_provider(llm_config):
-    api_key = decrypt_key(llm_config.api_key_encrypted)
-    return (
-        AnthropicProvider(api_key)
-        if llm_config.provider == 'anthropic'
-        else GeminiProvider(api_key)
+    from users.models import UserProviderKey
+    from users.encryption import decrypt_key
+    key_obj = UserProviderKey.objects.get(
+        user=llm_config.user, provider=llm_config.provider
     )
+    api_key = decrypt_key(key_obj.api_key_encrypted)
+    if llm_config.provider == 'anthropic':
+        return AnthropicProvider(api_key)
+    elif llm_config.provider == 'groq':
+        return GroqProvider(api_key)
+    else:
+        return GeminiProvider(api_key)
 
 
 def _get_llm_config(user):
-    """获取 LLM 配置，失败时抛出 ValueError。"""
     try:
         return user.llm_config
     except Exception:
-        raise ValueError('未配置 API Key，请先在设置页配置')
+        raise ValueError('未配置 LLM provider，请先在设置页配置')
 
 
 # ── Article endpoints ─────────────────────────────────────────────────────────

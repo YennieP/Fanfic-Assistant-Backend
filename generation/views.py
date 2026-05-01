@@ -12,6 +12,10 @@ from .prompt import build_prompt
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
 from logs.decorators import log_llm_call
+from .providers.groq import GroqProvider
+from users.models import UserProviderKey
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
     Phase 3 升级路径：在此函数中新增 content_embedding 的加权合并逻辑即可。
     """
     # 仅在 Gemini 配置下支持向量检索
-    if llm_config.provider != 'gemini':
+    if llm_config.provider not in ('gemini', 'groq'):
         return []
 
     try:
@@ -124,18 +128,22 @@ class GenerateStreamView(APIView):
                 pass
 
         try:
-            api_key = decrypt_key(llm_config.api_key_encrypted)
+            key_obj = UserProviderKey.objects.get(
+                user=request.user, provider=llm_config.provider
+            )
+            api_key = decrypt_key(key_obj.api_key_encrypted)
         except Exception:
             return StreamingHttpResponse(
-                _error_stream('API Key 解密失败，请重新在设置页保存'),
+                _error_stream(f'未找到 {llm_config.provider} 的 API Key，请在设置页保存'),
                 content_type='text/event-stream',
             )
 
-        provider = (
-            AnthropicProvider(api_key)
-            if llm_config.provider == 'anthropic'
-            else GeminiProvider(api_key)
-        )
+        if llm_config.provider == 'anthropic':
+            provider = AnthropicProvider(api_key)
+        elif llm_config.provider == 'groq':
+            provider = GroqProvider(api_key)
+        else:
+            provider = GeminiProvider(api_key)
 
         # Phase 2：检索风格示例片段（Gemini 用户生效，Anthropic 用户返回空列表）
         style_fragments = _get_style_fragments(
