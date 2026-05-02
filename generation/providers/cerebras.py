@@ -1,7 +1,12 @@
 """
-Cerebras provider — llama-3.3-70b
+Cerebras provider
 免费额度约 10 亿 token/月，速度极快（~1000 TPS），OpenAI SDK 兼容
 API Key 申请：https://cloud.cerebras.ai/
+
+可用模型（按账号 tier 而定）：
+  llama3.1-8b               ← 免费 tier 确认可用
+  llama-3.3-70b             ← 需要确认账号权限
+  llama-4-scout-17b-16e-instruct  ← 较新，性能更好
 """
 import logging
 from openai import OpenAI
@@ -14,7 +19,8 @@ class CerebrasProvider(BaseProvider):
     supports_video     = False
     supports_embedding = False
 
-    MODEL = 'llama-3.3-70b'
+    # 若 llama-3.3-70b 报 404，换成 llama3.1-8b 或 llama-4-scout-17b-16e-instruct
+    MODEL = 'llama3.1-8b'
 
     def __init__(self, api_key: str):
         self.client = OpenAI(
