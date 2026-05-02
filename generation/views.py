@@ -28,13 +28,21 @@ def _is_rate_limited(user_id: int, rate: int = 10, period: int = 60) -> bool:
     return False
 
 
-def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_config, limit: int = 3) -> list:
+def _get_style_fragments(
+    character: BaseCard,
+    scene_input: dict,
+    user,
+    llm_config,
+    limit: int = 5,
+) -> list:
     """
     从 pgvector 检索与当前场景最相似的风格示例片段。
 
+    limit 默认改为 5（原为 3），以支持候选反应面板展示。
+    调用方决定注入数量（通常注入 top-1，其余作为候选展示）。
+
     MVP 约束：向量化使用 gemini-embedding-001，仅当用户配置 Gemini 时生效。
-    降级策略：Anthropic/Groq 用户跳过注入，生成正常进行（不报错）。
-    Phase 3 升级路径：在此函数中新增 content_embedding 的加权合并逻辑即可。
+    降级策略：Anthropic/Groq 用户返回空列表，生成正常进行。
     """
     if llm_config.provider not in ('gemini', 'groq'):
         return []
@@ -45,9 +53,7 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
         from pgvector.django import CosineDistance
 
         if not Fragment.objects.filter(
-            owner=user,
-            character=character,
-            is_confirmed=True,
+            owner=user, character=character, is_confirmed=True,
         ).exists():
             return []
 
@@ -59,7 +65,7 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
 
         query_embedding = get_embedding(scene_text, api_key)
 
-        fragments = list(
+        return list(
             Fragment.objects.filter(
                 owner=user,
                 character=character,
@@ -69,18 +75,24 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
                 CosineDistance('embedding', query_embedding)
             )[:limit]
         )
-        return fragments
 
     except Exception:
         logger.exception('Style fragment retrieval failed, proceeding without injection')
         return []
 
 
-def _get_active_rel_contexts(
-    character: BaseCard,
-    active_relationship_ids: list,
-    user,
-) -> list:
+def _get_fragment_by_id(fragment_id: str, user) -> object | None:
+    """
+    候选反应面板：用户切换候选时，按 ID 直接获取指定片段，跳过相似度检索。
+    """
+    try:
+        from examples.models import Fragment
+        return Fragment.objects.get(id=fragment_id, owner=user, is_confirmed=True)
+    except Exception:
+        return None
+
+
+def _get_active_rel_contexts(character: BaseCard, active_relationship_ids: list, user) -> list:
     """
     根据前端传入的关系 ID 列表，查询对应关系实体和当前角色的 membership。
     返回 [(Relationship, RelationshipMembership | None), ...] 列表。
@@ -91,20 +103,26 @@ def _get_active_rel_contexts(
 
     try:
         rels = list(Relationship.objects.filter(
-            id__in=active_relationship_ids,
-            owner=user,
+            id__in=active_relationship_ids, owner=user,
         ))
         membership_map = {
             m.relationship_id: m
             for m in RelationshipMembership.objects.filter(
-                relationship__in=rels,
-                character=character,
+                relationship__in=rels, character=character,
             )
         }
         return [(rel, membership_map.get(rel.id)) for rel in rels]
     except Exception:
         logger.exception('Failed to fetch relationship contexts')
         return []
+
+
+def _fragment_preview(fragment, max_len: int = 120) -> str:
+    """生成片段的文字预览，用于候选面板展示。"""
+    text = fragment.text or ''
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + '…'
 
 
 class GenerateStreamView(APIView):
@@ -128,28 +146,19 @@ class GenerateStreamView(APIView):
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
         scene_input = request.data.get('scene_input', {})
-        # Scaffold: 前端传入当前激活的关系实体 ID 列表
-        # 写作页侧边栏实现前此列表为空，生成行为与之前完全一致
         active_relationship_ids = request.data.get('active_relationship_ids', [])
+        # 候选反应面板：切换候选时前端传入指定片段 ID
+        forced_fragment_id = request.data.get('forced_fragment_id')
 
         if not character_id:
-            return StreamingHttpResponse(
-                _error_stream('请选择角色'),
-                content_type='text/event-stream',
-            )
+            return StreamingHttpResponse(_error_stream('请选择角色'), content_type='text/event-stream')
         if not scene_input.get('location') or not scene_input.get('intent'):
-            return StreamingHttpResponse(
-                _error_stream('场景地点和写作意图为必填项'),
-                content_type='text/event-stream',
-            )
+            return StreamingHttpResponse(_error_stream('场景地点和写作意图为必填项'), content_type='text/event-stream')
 
         try:
             character = BaseCard.objects.get(id=character_id, owner=request.user)
         except BaseCard.DoesNotExist:
-            return StreamingHttpResponse(
-                _error_stream('角色不存在'),
-                content_type='text/event-stream',
-            )
+            return StreamingHttpResponse(_error_stream('角色不存在'), content_type='text/event-stream')
 
         au_mod = None
         if au_mod_id:
@@ -159,9 +168,7 @@ class GenerateStreamView(APIView):
                 pass
 
         try:
-            key_obj = UserProviderKey.objects.get(
-                user=request.user, provider=llm_config.provider
-            )
+            key_obj = UserProviderKey.objects.get(user=request.user, provider=llm_config.provider)
             api_key = decrypt_key(key_obj.api_key_encrypted)
         except Exception:
             return StreamingHttpResponse(
@@ -176,11 +183,23 @@ class GenerateStreamView(APIView):
         else:
             provider = GeminiProvider(api_key)
 
-        style_fragments = _get_style_fragments(
-            character, scene_input, request.user, llm_config
+        # ── 候选反应面板逻辑 ──────────────────────────────────────────────────
+        # 获取 top-5 候选片段（相似度排序）
+        all_candidates = _get_style_fragments(
+            character, scene_input, request.user, llm_config, limit=5
         )
 
-        # Scaffold: 查询激活关系的上下文，空列表时对生成无影响
+        if forced_fragment_id:
+            # 切换候选：使用指定片段注入，跳过相似度检索
+            forced = _get_fragment_by_id(forced_fragment_id, request.user)
+            style_fragments = [forced] if forced else all_candidates[:1]
+        else:
+            # 正常生成：注入相似度最高的 1 条
+            # 原设计（phase2.md §1）：「路径二加权采样，从候选集随机抽一条注入」
+            # 这里直接取 top-1（最高相似度），候选面板展示其余候选
+            style_fragments = all_candidates[:1]
+        # ── 候选面板逻辑结束 ──────────────────────────────────────────────────
+
         active_rel_contexts = _get_active_rel_contexts(
             character, active_relationship_ids, request.user
         )
@@ -206,11 +225,17 @@ class GenerateStreamView(APIView):
                     'generationId': str(generation_id),
                     'styleInjected': len(style_fragments) > 0,
                     'styleFragmentCount': len(style_fragments),
-                    # Scaffold: 本次生成实际使用了哪些关系实体
-                    # 前端侧边栏实现后用于确认激活状态
                     'activeRelationships': [str(rel.id) for rel, _ in active_rel_contexts],
-                    # Scaffold: 候选反应面板占位，待 phase1.md §7 实现时填充
-                    'candidates': [],
+                    # 候选反应面板：本次注入的片段 ID（面板标记「当前」用）
+                    'currentFragmentId': str(style_fragments[0].id) if style_fragments else None,
+                    # 候选反应面板：全部候选（最多 5 条），前端直接渲染
+                    'candidates': [
+                        {
+                            'fragmentId': str(f.id),
+                            'preview': _fragment_preview(f),
+                        }
+                        for f in all_candidates
+                    ],
                 })
                 yield f'data: {done_data}\n\n'
             except Exception as e:
