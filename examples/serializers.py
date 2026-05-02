@@ -7,12 +7,17 @@ class FragmentSerializer(serializers.ModelSerializer):
         model = Fragment
         fields = [
             'id', 'article', 'character', 'text', 'tags',
-            'is_confirmed', 'order', 'created_at', 'updated_at',
+            'is_confirmed', 'order',
+            # Scaffold: 连贯情绪弧 + 多角色标注预留字段
+            'sequence_group', 'sequence_order', 'parent_fragment',
+            'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'article', 'character', 'is_confirmed',
-            'order', 'created_at', 'updated_at',
+            'id', 'article', 'is_confirmed', 'order',
+            'created_at', 'updated_at',
         ]
+        # character 和 parent_fragment 不再是 read_only，
+        # 允许创建父片段（character=null）时由前端控制
 
 
 class ArticleListSerializer(serializers.ModelSerializer):

@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django.core.cache import cache
 
-from characters.models import BaseCard, AUMod
+from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .providers.anthropic import AnthropicProvider
@@ -14,7 +14,6 @@ from .providers.gemini import GeminiProvider
 from logs.decorators import log_llm_call
 from .providers.groq import GroqProvider
 from users.models import UserProviderKey
-
 
 
 logger = logging.getLogger(__name__)
@@ -33,11 +32,10 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
     """
     从 pgvector 检索与当前场景最相似的风格示例片段。
 
-    MVP 约束：向量化使用 Gemini text-embedding-004，仅当用户配置 Gemini 时生效。
-    降级策略：Anthropic 用户跳过注入，生成正常进行（不报错）。
+    MVP 约束：向量化使用 gemini-embedding-001，仅当用户配置 Gemini 时生效。
+    降级策略：Anthropic/Groq 用户跳过注入，生成正常进行（不报错）。
     Phase 3 升级路径：在此函数中新增 content_embedding 的加权合并逻辑即可。
     """
-    # 仅在 Gemini 配置下支持向量检索
     if llm_config.provider not in ('gemini', 'groq'):
         return []
 
@@ -46,7 +44,6 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
         from examples.embedding import get_embedding, scene_to_text
         from pgvector.django import CosineDistance
 
-        # 快速检查是否有已入库的片段，避免无效的 embedding API 调用
         if not Fragment.objects.filter(
             owner=user,
             character=character,
@@ -54,7 +51,8 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
         ).exists():
             return []
 
-        api_key = decrypt_key(llm_config.api_key_encrypted)
+        key_obj = UserProviderKey.objects.get(user=user, provider='gemini')
+        api_key = decrypt_key(key_obj.api_key_encrypted)
         scene_text = scene_to_text(scene_input)
         if not scene_text.strip():
             return []
@@ -74,8 +72,38 @@ def _get_style_fragments(character: BaseCard, scene_input: dict, user, llm_confi
         return fragments
 
     except Exception:
-        # 降级：任何检索错误不影响生成
         logger.exception('Style fragment retrieval failed, proceeding without injection')
+        return []
+
+
+def _get_active_rel_contexts(
+    character: BaseCard,
+    active_relationship_ids: list,
+    user,
+) -> list:
+    """
+    根据前端传入的关系 ID 列表，查询对应关系实体和当前角色的 membership。
+    返回 [(Relationship, RelationshipMembership | None), ...] 列表。
+    只返回属于当前用户的关系（防止越权）。
+    """
+    if not active_relationship_ids:
+        return []
+
+    try:
+        rels = list(Relationship.objects.filter(
+            id__in=active_relationship_ids,
+            owner=user,
+        ))
+        membership_map = {
+            m.relationship_id: m
+            for m in RelationshipMembership.objects.filter(
+                relationship__in=rels,
+                character=character,
+            )
+        }
+        return [(rel, membership_map.get(rel.id)) for rel in rels]
+    except Exception:
+        logger.exception('Failed to fetch relationship contexts')
         return []
 
 
@@ -100,6 +128,9 @@ class GenerateStreamView(APIView):
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
         scene_input = request.data.get('scene_input', {})
+        # Scaffold: 前端传入当前激活的关系实体 ID 列表
+        # 写作页侧边栏实现前此列表为空，生成行为与之前完全一致
+        active_relationship_ids = request.data.get('active_relationship_ids', [])
 
         if not character_id:
             return StreamingHttpResponse(
@@ -145,13 +176,17 @@ class GenerateStreamView(APIView):
         else:
             provider = GeminiProvider(api_key)
 
-        # Phase 2：检索风格示例片段（Gemini 用户生效，Anthropic 用户返回空列表）
         style_fragments = _get_style_fragments(
             character, scene_input, request.user, llm_config
         )
 
+        # Scaffold: 查询激活关系的上下文，空列表时对生成无影响
+        active_rel_contexts = _get_active_rel_contexts(
+            character, active_relationship_ids, request.user
+        )
+
         system_prompt, user_prompt = build_prompt(
-            character, au_mod, scene_input, style_fragments
+            character, au_mod, scene_input, style_fragments, active_rel_contexts
         )
 
         generation_id = uuid.uuid4()
@@ -165,12 +200,17 @@ class GenerateStreamView(APIView):
                 for chunk in _get_stream(user=request.user, generation_id=generation_id):
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
+
                 done_data = json.dumps({
                     'type': 'done',
                     'generationId': str(generation_id),
-                    # Phase 2：告知前端本次生成是否注入了风格示例
                     'styleInjected': len(style_fragments) > 0,
                     'styleFragmentCount': len(style_fragments),
+                    # Scaffold: 本次生成实际使用了哪些关系实体
+                    # 前端侧边栏实现后用于确认激活状态
+                    'activeRelationships': [str(rel.id) for rel, _ in active_rel_contexts],
+                    # Scaffold: 候选反应面板占位，待 phase1.md §7 实现时填充
+                    'candidates': [],
                 })
                 yield f'data: {done_data}\n\n'
             except Exception as e:

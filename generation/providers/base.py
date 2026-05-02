@@ -19,6 +19,11 @@ class CompleteResult:
 
 
 class BaseProvider(ABC):
+    # Scaffold: 能力标志（architecture.md LLM Provider 设计）
+    # 子类按实际能力覆盖，避免到处写 if provider == 'gemini' 的 hardcode 判断
+    supports_video: bool = False
+    supports_embedding: bool = False
+
     def __init__(self, api_key: str):
         self.api_key = api_key
 

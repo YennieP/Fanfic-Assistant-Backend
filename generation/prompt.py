@@ -6,12 +6,16 @@ def build_prompt(
     au_mod: AUMod | None,
     scene_input: dict,
     style_fragments: list | None = None,
+    active_rel_contexts: list | None = None,
 ) -> tuple[str, str]:
     """
     返回 (system_prompt, user_prompt)
-    style_fragments: Phase 2 风格示例片段列表，从 pgvector 检索得到
+
+    active_rel_contexts: [(Relationship, RelationshipMembership | None), ...]
+      来自 generation/views.py 的 _get_active_rel_contexts()
+      空列表时行为与 Phase 1 完全一致（向后兼容）
     """
-    system = _build_system(character, au_mod, style_fragments)
+    system = _build_system(character, au_mod, style_fragments, active_rel_contexts)
     user = _build_user(scene_input)
     return system, user
 
@@ -20,6 +24,7 @@ def _build_system(
     character: BaseCard,
     au_mod: AUMod | None,
     style_fragments: list | None = None,
+    active_rel_contexts: list | None = None,
 ) -> str:
     if character.gender and character.gender != 'other':
         pronoun = character.gender
@@ -108,8 +113,43 @@ def _build_system(
         if au_mod.role_current_situation:
             lines.append(f'当前处境：{au_mod.role_current_situation}')
 
+    # ── Scaffold: 关系实体注入（phase1.md §9）──────────────────────────────
+    # active_rel_contexts 为空时此段落完全不存在，Phase 1 行为不变
+    # 注入位置：AU设定之后、风格示例之前
+    if active_rel_contexts:
+        for rel, membership in active_rel_contexts:
+            lines.append(f'\n【激活的关系设定】')
+            if rel.overall_tone:
+                lines.append(f'关系基调：{rel.overall_tone}')
+
+            if membership is None:
+                continue
+
+            # 该角色在此关系中的性格切面
+            if membership.quick_labels:
+                label_str = '、'.join(
+                    l['content'] for l in membership.quick_labels
+                    if isinstance(l, dict) and l.get('content')
+                )
+                if label_str:
+                    lines.append(f'{character.name} 在此关系中：{label_str}')
+
+            # 关系专属红线
+            if membership.forbidden_behaviors:
+                lines.append('关系专属红线：')
+                for fb in membership.forbidden_behaviors:
+                    content = fb.get('content', str(fb)) if isinstance(fb, dict) else str(fb)
+                    lines.append(f'  ✕ {content}')
+
+            # 称呼规则
+            if membership.nicknames_for_others:
+                for nick in membership.nicknames_for_others:
+                    if isinstance(nick, dict) and nick.get('calls') and nick.get('as'):
+                        as_names = '、'.join(nick['as'])
+                        lines.append(f'称呼 {nick["calls"]} 为：{as_names}')
+    # ── 关系注入结束 ────────────────────────────────────────────────────────
+
     # ── Phase 2：风格示例注入 ────────────────────────────────────────────────
-    # style_fragments 从 pgvector 检索得到，无片段时此段落不存在，不影响 Phase 1 行为
     if style_fragments:
         lines.append('\n【台词风格参考（来自作者历史作品，仅参考语言风格和叙事习惯，不要复制原文）】')
         for i, fragment in enumerate(style_fragments, 1):
