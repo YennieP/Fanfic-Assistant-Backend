@@ -398,7 +398,14 @@ class FragmentInferTagsView(APIView):
             tags = infer_tags(fragment.text, provider, language=language)
         except Exception as e:
             logger.exception('Tag inference failed')
-            return Response({'error': f'标签推断失败：{str(e)}'}, status=500)
+            err_str = str(e)
+            if '429' in err_str or 'rate_limit_exceeded' in err_str or 'Rate limit' in err_str:
+                return Response({
+                    'error': f'{llm_config.provider.capitalize()} 每日 token 配额已用完，请明天再试或在设置页切换其他 provider'
+                }, status=429)
+            if '503' in err_str or 'UNAVAILABLE' in err_str:
+                return Response({'error': 'LLM 服务暂时不可用，请稍后重试'}, status=503)
+            return Response({'error': f'标签推断失败：{err_str}'}, status=500)
 
         fragment.tags         = tags
         fragment.is_confirmed = False
