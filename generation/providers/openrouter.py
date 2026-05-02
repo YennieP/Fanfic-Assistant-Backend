@@ -45,6 +45,7 @@ class OpenRouterProvider(BaseProvider):
                 prompt_tokens     = chunk.usage.prompt_tokens     or 0
                 completion_tokens = chunk.usage.completion_tokens or 0
         yield UsageInfo(
+            model=self.MODEL,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
@@ -67,6 +68,7 @@ class OpenRouterProvider(BaseProvider):
         usage = response.usage
         return CompleteResult(
             text=text,
+            model=self.MODEL,
             prompt_tokens=usage.prompt_tokens         if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
         )

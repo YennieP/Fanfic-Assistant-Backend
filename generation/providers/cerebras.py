@@ -47,6 +47,7 @@ class CerebrasProvider(BaseProvider):
                 prompt_tokens     = chunk.usage.prompt_tokens     or 0
                 completion_tokens = chunk.usage.completion_tokens or 0
         yield UsageInfo(
+            model=self.MODEL,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
