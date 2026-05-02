@@ -20,11 +20,11 @@ relationships_router = routers.NestedDefaultRouter(router, r'relationships', loo
 relationships_router.register(r'memberships', RelationshipMembershipViewSet, basename='relationship-memberships')
 
 urlpatterns = [
+    path('characters/suggest-completions/', suggest.SuggestCompletionsView.as_view(), name='character-suggest'),
     path('', include(router.urls)),
     path('', include(characters_router.urls)),
     path('', include(relationships_router.urls)),
     path('taxonomy/', taxonomy_view, name='taxonomy'),
     path('label-history/', LabelHistoryView.as_view(), name='label-history'),
-    path('characters/suggest-completions/', suggest.SuggestCompletionsView.as_view(), name='character-suggest'),
 
 ]
