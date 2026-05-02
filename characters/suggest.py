@@ -90,7 +90,6 @@ def build_suggest_prompt(character_data: dict) -> str:
     name = character_data.get('name', '未知角色')
     fandom = character_data.get('fandom', '')
 
-    # ── 已填字段汇总（作为推断上下文）────────────────────────────────────
     context_lines = [f'角色名：{name}']
     if fandom:
         context_lines.append(f'来源：{fandom}')
@@ -98,74 +97,73 @@ def build_suggest_prompt(character_data: dict) -> str:
     mbti = (character_data.get('mbti') or '').strip()
     if mbti:
         context_lines.append(f'MBTI：{mbti}')
-        notes = (character_data.get('mbtiNotes') or '').strip()
+        notes = (character_data.get('mbti_notes') or '').strip()   # ← mbtiNotes
         if notes:
             context_lines.append(f'MBTI 体现：{notes}')
 
-    for field, label in [
-        ('coreValues',        '核心价值观'),
-        ('coreFears',         '核心恐惧'),
-        ('keyExperiences',    '重要经历'),
-        ('quickLabels',       '性格标签'),
-        ('forbiddenBehaviors','人设红线'),
+    for field_snake, field_camel, label in [
+        ('core_values',        'coreValues',        '核心价值观'),
+        ('core_fears',         'coreFears',         '核心恐惧'),
+        ('key_experiences',    'keyExperiences',    '重要经历'),
+        ('quick_labels',       'quickLabels',       '性格标签'),
+        ('forbidden_behaviors','forbiddenBehaviors','人设红线'),
     ]:
-        items = _list_contents(character_data.get(field) or [])
+        items = _list_contents(character_data.get(field_snake) or [])
         if items:
             context_lines.append(f'{label}：{"、".join(items)}')
 
-    for field, label in [
-        ('defaultState',          '日常情绪基调'),
-        ('emotionExpressionStyle','情绪表达方式'),
-        ('recoveryPattern',       '情绪恢复方式'),
+    for field_snake, label in [
+        ('default_state',           '日常情绪基调'),
+        ('emotion_expression_style','情绪表达方式'),
+        ('recovery_pattern',        '情绪恢复方式'),
     ]:
-        val = (character_data.get(field) or '').strip()
+        val = (character_data.get(field_snake) or '').strip()
         if val:
             context_lines.append(f'{label}：{val}')
 
-    patterns = character_data.get('behavioralPatterns') or []
+    patterns = character_data.get('behavioral_patterns') or []    # ← behavioralPatterns
     if patterns:
         context_lines.append(f'已有行为模式（{len(patterns)} 条，摘录前 2 条）：')
         for i, p in enumerate(patterns[:2]):
             t = p.get('trigger', {}) if isinstance(p, dict) else {}
             r = p.get('response', {}) if isinstance(p, dict) else {}
-            imm = (t.get('immediate') or '').strip()
+            imm  = (t.get('immediate') or '').strip()
             resp = (r.get('immediate') or '').strip()
             if imm or resp:
                 context_lines.append(f'  模式{i+1}：触发="{imm}" → 当下="{resp}"')
 
-    triggers = character_data.get('emotionalTriggers') or []
+    triggers = character_data.get('emotional_triggers') or []     # ← emotionalTriggers
     if triggers:
         context_lines.append(f'已有情绪触发点（{len(triggers)} 条）')
 
     context = '\n'.join(context_lines)
 
-    # ── 确定需要补全的字段 ────────────────────────────────────────────────
+    # ── 需要补全的字段（field: 标注 camelCase，供前端 setValue 使用）────────
     empty_fields = []
 
-    for field, label in [
-        ('coreValues',        '核心价值观'),
-        ('coreFears',         '核心恐惧'),
-        ('keyExperiences',    '重要经历'),
-        ('quickLabels',       '性格标签'),
-        ('forbiddenBehaviors','人设红线'),
+    for field_snake, field_camel, label in [
+        ('core_values',        'coreValues',        '核心价值观'),
+        ('core_fears',         'coreFears',         '核心恐惧'),
+        ('key_experiences',    'keyExperiences',    '重要经历'),
+        ('quick_labels',       'quickLabels',       '性格标签'),
+        ('forbidden_behaviors','forbiddenBehaviors','人设红线'),
     ]:
-        if len(_list_contents(character_data.get(field) or [])) < 2:
-            empty_fields.append(f'{label}（field: {field}，type: list_append）')
+        if len(_list_contents(character_data.get(field_snake) or [])) < 2:
+            empty_fields.append(f'{label}（field: {field_camel}，type: list_append）')
 
-    for field, label in [
-        ('defaultState',          '日常情绪基调'),
-        ('emotionExpressionStyle','情绪表达方式'),
-        ('recoveryPattern',       '情绪恢复方式'),
+    for field_snake, field_camel, label in [
+        ('default_state',           'defaultState',           '日常情绪基调'),
+        ('emotion_expression_style','emotionExpressionStyle', '情绪表达方式'),
+        ('recovery_pattern',        'recoveryPattern',        '情绪恢复方式'),
     ]:
-        if not (character_data.get(field) or '').strip():
-            empty_fields.append(f'{label}（field: {field}，type: text）')
+        if not (character_data.get(field_snake) or '').strip():
+            empty_fields.append(f'{label}（field: {field_camel}，type: text）')
 
     if len(patterns) < 3:
         empty_fields.append(
             f'行为模式（field: behavioralPatterns，type: pattern，'
             f'当前 {len(patterns)} 条，建议补充 1-2 条新场景）'
         )
-
     if len(triggers) < 2:
         empty_fields.append(
             f'情绪触发点（field: emotionalTriggers，type: trigger，'
@@ -183,9 +181,8 @@ def build_suggest_prompt(character_data: dict) -> str:
         f'以下是角色 {name} 已填写的信息：\n\n{context}\n\n'
         f'---\n\n'
         f'请为以下空白或内容不足的字段提供补全建议：\n{target_list}\n\n'
-        f'注意：严格使用括号内标注的 field 名称；不重复已有内容；label 填中文显示名。'
+        f'注意：严格使用括号内标注的 field 名称（camelCase）；不重复已有内容；label 填中文显示名。'
     )
-
 
 def _parse_json(text: str) -> dict:
     if not text:
