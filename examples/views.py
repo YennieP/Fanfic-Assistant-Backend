@@ -14,6 +14,8 @@ from .llm_pipeline import segment_article, infer_tags
 from generation.providers.anthropic import AnthropicProvider
 from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
+from generation.providers.cerebras import CerebrasProvider
+from generation.providers.openrouter import OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,10 @@ def _get_provider(llm_config):
         return AnthropicProvider(api_key)
     elif llm_config.provider == 'groq':
         return GroqProvider(api_key)
+    elif llm_config.provider == 'cerebras':
+        return CerebrasProvider(api_key)
+    elif llm_config.provider == 'openrouter':
+        return OpenRouterProvider(api_key)
     else:
         return GeminiProvider(api_key)
 

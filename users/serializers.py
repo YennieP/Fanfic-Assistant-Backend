@@ -10,6 +10,8 @@ _PROVIDER_CAPABILITIES = {
     'anthropic': {'video': False, 'embedding': False},
     'gemini':    {'video': True,  'embedding': True},
     'groq':      {'video': False, 'embedding': False},
+    'cerebras':  {'video': False, 'embedding': False},
+    'openrouter':{'video': False, 'embedding': False},
 }
 
 

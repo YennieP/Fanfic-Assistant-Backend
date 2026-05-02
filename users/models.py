@@ -2,7 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 
 
-SUPPORTED_PROVIDERS = ['anthropic', 'gemini', 'groq']
+SUPPORTED_PROVIDERS = ['anthropic', 'gemini', 'groq', 'cerebras', 'openrouter']
 
 
 class UserProviderKey(models.Model):

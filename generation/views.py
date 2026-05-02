@@ -13,6 +13,8 @@ from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
 from logs.decorators import log_llm_call
 from .providers.groq import GroqProvider
+from .providers.cerebras import CerebrasProvider
+from .providers.openrouter import OpenRouterProvider
 from users.models import UserProviderKey
 
 
@@ -39,7 +41,7 @@ def _get_style_fragments(
     从 pgvector 检索与当前场景最相似的风格示例片段。
     limit 默认 5（支持候选面板）；注入时取 top-1，其余作为候选展示。
     """
-    if llm_config.provider not in ('gemini', 'groq'):
+    if llm_config.provider not in ('gemini', 'groq', 'cerebras', 'openrouter'):
         return []
 
     try:
@@ -178,6 +180,10 @@ class GenerateStreamView(APIView):
             provider = AnthropicProvider(api_key)
         elif llm_config.provider == 'groq':
             provider = GroqProvider(api_key)
+        elif llm_config.provider == 'cerebras':
+            provider = CerebrasProvider(api_key)
+        elif llm_config.provider == 'openrouter':
+            provider = OpenRouterProvider(api_key)
         else:
             provider = GeminiProvider(api_key)
 
