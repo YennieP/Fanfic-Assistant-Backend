@@ -11,6 +11,7 @@ class FragmentSerializer(serializers.ModelSerializer):
             # Scaffold: 连贯情绪弧 + 多角色标注预留字段
             'sequence_group', 'sequence_order', 'parent_fragment',
             'created_at', 'updated_at',
+            'fragment_type', 'start_line', 'end_line',
         ]
         read_only_fields = [
             'id', 'article', 'is_confirmed', 'order',

@@ -1,4 +1,5 @@
 import logging
+from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 def _get_provider(llm_config):
     from users.models import UserProviderKey
-    from users.encryption import decrypt_key
     key_obj = UserProviderKey.objects.get(
         user=llm_config.user, provider=llm_config.provider
     )
@@ -56,7 +56,7 @@ class ArticleListView(APIView):
             request.data.get('character_id')
             or request.data.get('characterId')
         )
-        title = request.data.get('title', '').strip()
+        title   = request.data.get('title', '').strip()
         content = request.data.get('content', '').strip()
 
         if not character_id:
@@ -83,10 +83,8 @@ class ArticleDetailView(APIView):
 
     def patch(self, request, article_id):
         article = get_object_or_404(Article, id=article_id, owner=request.user)
-        if 'title' in request.data:
-            article.title = request.data['title']
-        if 'content' in request.data:
-            article.content = request.data['content']
+        if 'title'   in request.data: article.title   = request.data['title']
+        if 'content' in request.data: article.content = request.data['content']
         article.save()
         return Response(ArticleSerializer(article).data)
 
@@ -97,7 +95,16 @@ class ArticleDetailView(APIView):
 
 
 class ArticleSegmentView(APIView):
-    """POST /api/examples/articles/:id/segment/ — LLM 情节切割"""
+    """
+    POST /api/examples/articles/:id/segment/ — LLM 情节切割
+
+    智能重切割逻辑：
+    1. 检查文章是否有已确认且带行号的片段
+    2. 有 → 只切最后已确认行之后的新内容；将最后已确认片段作为上下文注入 LLM
+    3. 无 → 全文切割（初次切割或所有片段均未确认）
+    
+    切割结果包含 story 和 skip 两种类型，保证所有行均有归属（全文覆盖不变量）。
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, article_id):
@@ -108,39 +115,82 @@ class ArticleSegmentView(APIView):
         except ValueError as e:
             return Response({'error': str(e)}, status=400)
 
-        # 删除该文章未确认的旧片段，保留已确认的
-        article.fragments.filter(is_confirmed=False).delete()
+        lines       = article.content.splitlines()
+        total_lines = len(lines)
+
+        # ── 智能重切割：寻找已确认片段中最后一个有行号的 ────────────────────
+        last_confirmed = (
+            article.fragments
+            .filter(is_confirmed=True, end_line__isnull=False)
+            .order_by('end_line')
+            .last()
+        )
+
+        if last_confirmed:
+            last_end = last_confirmed.end_line
+
+            if last_end >= total_lines - 1:
+                return Response({
+                    'count':   0,
+                    'fragments': [],
+                    'message': '所有内容已分割完毕，无需重新切割',
+                })
+
+            global_start    = last_end + 1
+            overlap_context = last_confirmed.text
+
+            # 清理新区间内的未确认片段（含无行号的旧格式片段）
+            article.fragments.filter(is_confirmed=False, start_line__gte=global_start).delete()
+            article.fragments.filter(is_confirmed=False, start_line__isnull=True).delete()
+        else:
+            # 初次切割或全部未确认：清除所有未确认，全文重切
+            article.fragments.filter(is_confirmed=False).delete()
+            global_start    = 0
+            overlap_context = None
+        # ── 智能重切割结束 ────────────────────────────────────────────────────
+
+        new_content = '\n'.join(lines[global_start:])
+        if not new_content.strip():
+            return Response({'count': 0, 'fragments': [], 'message': '没有新内容需要分割'})
 
         try:
             provider = _get_provider(llm_config)
-            segments = segment_article(article.content, provider)
+            segment_results = segment_article(
+                new_content,
+                provider,
+                global_start=global_start,
+                overlap_context=overlap_context,
+            )
         except Exception as e:
             logger.exception('Article segmentation failed')
             err_str = str(e)
             if '503' in err_str or 'UNAVAILABLE' in err_str:
-                return Response({
-                    'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'
-                }, status=503)
+                return Response({'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
             return Response({'error': f'切割失败：{err_str}'}, status=500)
 
-        if not segments:
-            return Response({
-                'error': 'Gemini 返回了空结果，可能是负载过高，请稍后重试'
-            }, status=503)
+        if not segment_results:
+            return Response({'error': 'Gemini 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
 
-        fragments = [
-            Fragment.objects.create(
+        # order 接续已有片段的最大值
+        max_order = article.fragments.aggregate(max_order=Max('order'))['max_order']
+        next_order = (max_order + 1) if max_order is not None else 0
+
+        fragments = []
+        for i, seg in enumerate(segment_results):
+            f = Fragment.objects.create(
                 owner=request.user,
                 article=article,
                 character=article.character,
-                text=text,
-                order=i,
+                text=seg['text'],
+                fragment_type=seg.get('type', 'story'),
+                start_line=seg['start'],
+                end_line=seg['end'],
+                order=next_order + i,
             )
-            for i, text in enumerate(segments)
-        ]
+            fragments.append(f)
 
         return Response({
-            'count': len(fragments),
+            'count':     len(fragments),
             'fragments': FragmentSerializer(fragments, many=True).data,
         })
 
@@ -154,46 +204,49 @@ class ArticleBatchConfirmView(APIView):
 
         from users.models import UserProviderKey
         try:
-            gemini_key_obj = UserProviderKey.objects.get(
-                user=request.user, provider='gemini'
-            )
+            gemini_key_obj = UserProviderKey.objects.get(user=request.user, provider='gemini')
             api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
         except UserProviderKey.DoesNotExist:
             return Response({
                 'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
             }, status=400)
 
-        to_confirm = article.fragments.filter(is_confirmed=False).exclude(tags={})
+        # 只处理 story 类型、未确认、有标签的片段（skip 片段不入库）
+        to_confirm = article.fragments.filter(
+            is_confirmed=False,
+            fragment_type='story',
+        ).exclude(tags={})
 
         confirmed_ids = []
-        error_ids = []
+        error_ids     = []
 
         for fragment in to_confirm:
             try:
                 tag_text = tags_to_text(fragment.tags)
                 if not tag_text:
                     continue
-                fragment.embedding = get_embedding(tag_text, api_key)
+                fragment.embedding   = get_embedding(tag_text, api_key)
                 fragment.is_confirmed = True
                 fragment.save()
                 confirmed_ids.append(str(fragment.id))
             except Exception:
-                logger.exception(f'Vectorization failed for fragment {fragment.id}')
+                logger.exception('Vectorization failed for fragment %s', fragment.id)
                 error_ids.append(str(fragment.id))
 
         return Response({
             'confirmed': len(confirmed_ids),
-            'errors': len(error_ids),
+            'errors':    len(error_ids),
             'error_ids': error_ids,
         })
-    
+
+
 # ── Fragment endpoints ────────────────────────────────────────────────────────
 
 class FragmentListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        character_id = request.query_params.get('character_id')
+        character_id   = request.query_params.get('character_id')
         confirmed_only = request.query_params.get('confirmed') == 'true'
         qs = Fragment.objects.filter(owner=request.user).select_related('article', 'character')
         if character_id:
@@ -222,7 +275,7 @@ class FragmentDetailView(APIView):
             changed = True
         if changed:
             fragment.is_confirmed = False
-            fragment.embedding = None
+            fragment.embedding    = None
         fragment.save()
         return Response(FragmentSerializer(fragment).data)
 
@@ -244,16 +297,21 @@ class FragmentInferTagsView(APIView):
         except ValueError as e:
             return Response({'error': str(e)}, status=400)
 
+        # 前端传入当前界面语言（'zh' 或 'en'），默认 'zh' 兼容旧请求
+        language = request.data.get('lang', 'zh')
+        if language not in ('zh', 'en'):
+            language = 'zh'
+
         try:
             provider = _get_provider(llm_config)
-            tags = infer_tags(fragment.text, provider)
+            tags = infer_tags(fragment.text, provider, language=language)
         except Exception as e:
             logger.exception('Tag inference failed')
             return Response({'error': f'标签推断失败：{str(e)}'}, status=500)
 
-        fragment.tags = tags
+        fragment.tags         = tags
         fragment.is_confirmed = False
-        fragment.embedding = None
+        fragment.embedding    = None
         fragment.save()
         return Response(FragmentSerializer(fragment).data)
 
@@ -265,14 +323,15 @@ class FragmentConfirmView(APIView):
     def post(self, request, fragment_id):
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
 
+        if fragment.fragment_type == 'skip':
+            return Response({'error': 'skip 类型片段不需要入库'}, status=400)
+
         if not fragment.tags:
             return Response({'error': '请先为片段打标签再确认入库'}, status=400)
 
         from users.models import UserProviderKey
         try:
-            gemini_key_obj = UserProviderKey.objects.get(
-                user=request.user, provider='gemini'
-            )
+            gemini_key_obj = UserProviderKey.objects.get(user=request.user, provider='gemini')
             api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
         except UserProviderKey.DoesNotExist:
             return Response({
@@ -283,7 +342,7 @@ class FragmentConfirmView(APIView):
             tag_text = tags_to_text(fragment.tags)
             if not tag_text:
                 return Response({'error': '标签内容为空，无法向量化'}, status=400)
-            fragment.embedding = get_embedding(tag_text, api_key)
+            fragment.embedding    = get_embedding(tag_text, api_key)
             fragment.is_confirmed = True
             fragment.save()
         except Exception as e:

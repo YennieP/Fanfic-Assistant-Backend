@@ -16,6 +16,7 @@ from .serializers import (
     LabelHistorySerializer,
 )
 from rest_framework.views import APIView
+from core.taxonomy import get_taxonomy
 
 
 class BaseCardViewSet(viewsets.ModelViewSet):
@@ -102,7 +103,8 @@ def taxonomy_view(request):
     Phase 2 Example Library A 片段标注使用相同 schema。
     camel-case middleware 自动转换 key：scene_type → sceneType 等。
     """
-    return Response(TAXONOMY)
+    lang = request.GET.get('lang', 'zh')
+    return Response(get_taxonomy(lang))
 
 class LabelHistoryView(APIView):
     """
