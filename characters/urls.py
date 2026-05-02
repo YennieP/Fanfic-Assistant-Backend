@@ -6,6 +6,8 @@ from .views import (
     taxonomy_view,
     LabelHistoryView,
 )
+from django.urls import path
+from . import suggest
 
 router = routers.DefaultRouter()
 router.register(r'characters', BaseCardViewSet, basename='character')
@@ -23,4 +25,6 @@ urlpatterns = [
     path('', include(relationships_router.urls)),
     path('taxonomy/', taxonomy_view, name='taxonomy'),
     path('label-history/', LabelHistoryView.as_view(), name='label-history'),
+    path('characters/suggest-completions/', suggest.SuggestCompletionsView.as_view(), name='character-suggest'),
+
 ]
