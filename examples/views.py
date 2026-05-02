@@ -320,6 +320,35 @@ class FragmentListView(APIView):
             qs = qs.filter(is_confirmed=True)
         return Response(FragmentSerializer(qs, many=True).data)
 
+    def post(self, request):
+        """
+        创建单个草稿片段，供前端在冲突解决后创建残余片段使用。
+        不触发向量化，fragment_type 固定为 'story'，is_confirmed=False。
+        """
+        article_id = (
+            request.data.get('article_id')
+            or request.data.get('articleId')
+        )
+        text  = request.data.get('text', '').strip()
+        order = int(request.data.get('order', 0))
+
+        if not article_id:
+            return Response({'error': '请提供 article_id'}, status=400)
+        if not text:
+            return Response({'error': '片段内容不能为空'}, status=400)
+
+        article = get_object_or_404(Article, id=article_id, owner=request.user)
+
+        fragment = Fragment.objects.create(
+            owner=request.user,
+            article=article,
+            character=article.character,
+            text=text,
+            order=order,
+            fragment_type='story',
+        )
+        return Response(FragmentSerializer(fragment).data, status=201)
+
 
 class FragmentDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
