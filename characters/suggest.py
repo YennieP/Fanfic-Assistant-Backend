@@ -69,18 +69,18 @@ field 字段必须使用括号内标注的 camelCase 英文字段名。
       "items": ["条目1", "条目2"],
       "value": "文本内容",
       "pattern": {
-        "trigger": {
-          "immediate": "直接触发情境",
-          "priorContext": "前因背景",
-          "relationship": "涉及的对象和关系",
-          "stakes": "对角色意味着什么"
+            "trigger": {
+                "immediate": "直接触发情境，例：有人当众质疑他的判断",
+                "priorContext": "前因背景，例：上周刚因类似事情被批评过",
+                "relationship": "涉及的具体对象及关系，例：队友陈默，两人关系紧张中（若无具体对象可留空）",
+                "stakes": "对角色意味着什么，例：直接威胁到他对自我掌控感的认知"
+            },
+            "response": {
+                "immediate": "当下可见反应（台词/动作/表情），例：神情不变，简短回应，随后拉开物理距离",
+                "followUp": "事后行为，例：独处两小时后主动找对方谈",
+                "internal": "内心实际感受（与外在不同），例：表面平静但内心已在评估是否需要重新界定边界"
+            }
         },
-        "response": {
-          "immediate": "当下可见反应（台词/动作/表情）",
-          "followUp": "事后行为",
-          "internal": "内心实际感受"
-        }
-      },
       "triggerItem": {
         "trigger": "触发情境描述",
         "reaction": "具体反应方式"
