@@ -1,5 +1,5 @@
 import logging
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -37,6 +37,40 @@ def _get_llm_config(user):
         return user.llm_config
     except Exception:
         raise ValueError('未配置 LLM provider，请先在设置页配置')
+
+
+def _find_gaps(confirmed_fragments: list, total_lines: int) -> list[tuple[int, int]]:
+    """
+    在已确认片段的行号覆盖范围中找出所有「缺口」（未覆盖的行范围）。
+
+    返回 list of (gap_start, gap_end)，三种情况均涵盖：
+      - 缺口在正文开头  ：第一个已确认片段之前有未覆盖行
+      - 缺口在正文中间  ：两个相邻已确认片段之间有未覆盖行
+      - 缺口在正文末尾  ：最后一个已确认片段之后有未覆盖行
+    """
+    if not confirmed_fragments:
+        return [(0, total_lines - 1)]
+
+    gaps: list[tuple[int, int]] = []
+
+    # 缺口在开头
+    first_start = confirmed_fragments[0].start_line
+    if first_start > 0:
+        gaps.append((0, first_start - 1))
+
+    # 缺口在中间
+    for i in range(len(confirmed_fragments) - 1):
+        end_curr  = confirmed_fragments[i].end_line
+        start_next = confirmed_fragments[i + 1].start_line
+        if start_next > end_curr + 1:
+            gaps.append((end_curr + 1, start_next - 1))
+
+    # 缺口在末尾
+    last_end = confirmed_fragments[-1].end_line
+    if last_end < total_lines - 1:
+        gaps.append((last_end + 1, total_lines - 1))
+
+    return gaps
 
 
 # ── Article endpoints ─────────────────────────────────────────────────────────
@@ -98,12 +132,20 @@ class ArticleSegmentView(APIView):
     """
     POST /api/examples/articles/:id/segment/ — LLM 情节切割
 
-    智能重切割逻辑：
-    1. 检查文章是否有已确认且带行号的片段
-    2. 有 → 只切最后已确认行之后的新内容；将最后已确认片段作为上下文注入 LLM
-    3. 无 → 全文切割（初次切割或所有片段均未确认）
-    
-    切割结果包含 story 和 skip 两种类型，保证所有行均有归属（全文覆盖不变量）。
+    智能缺口检测逻辑（双向上下文，三种缺口位置均支持）：
+
+    1. 读取所有「已确认且有行号」的片段，排序后找出未覆盖行范围（缺口）
+    2. 对每个缺口：
+       - 找前方最近的已确认片段 → prev_context（末尾若干行）
+       - 找后方最近的已确认片段 → next_context（开头若干行）
+       - 调用 LLM 仅切割该缺口范围内的内容
+    3. 将所有新片段合并，order 按 start_line 排序保证正确顺序
+    4. 在每个缺口范围内清理旧的未确认片段（避免重复）
+
+    三种缺口位置：
+      - 缺口在正文开头：只有 next_context（无前置）
+      - 缺口在正文中间：prev_context + next_context
+      - 缺口在正文末尾：只有 prev_context（无后置）
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -117,86 +159,113 @@ class ArticleSegmentView(APIView):
 
         lines       = article.content.splitlines()
         total_lines = len(lines)
+        if total_lines == 0:
+            return Response({'error': '文章内容为空'}, status=400)
 
-        # ── 智能重切割：寻找已确认片段中最后一个有行号的 ────────────────────
-        last_confirmed = (
+        # ── 获取所有已确认且有行号的片段（用于 gap 检测和上下文提取）────────
+        confirmed = list(
             article.fragments
-            .filter(is_confirmed=True, end_line__isnull=False)
-            .order_by('end_line')
-            .last()
+            .filter(is_confirmed=True, start_line__isnull=False)
+            .order_by('start_line')
         )
 
-        if last_confirmed:
-            last_end = last_confirmed.end_line
+        # ── 找出所有缺口 ──────────────────────────────────────────────────────
+        gaps = _find_gaps(confirmed, total_lines)
 
-            if last_end >= total_lines - 1:
-                return Response({
-                    'count':   0,
-                    'fragments': [],
-                    'message': '所有内容已分割完毕，无需重新切割',
-                })
+        if not gaps:
+            return Response({
+                'count':   0,
+                'fragments': [],
+                'message': '所有内容已分割完毕，无需重新切割',
+            })
 
-            global_start    = last_end + 1
-            overlap_context = last_confirmed.text
+        # ── 清理各缺口内的旧未确认片段 ────────────────────────────────────────
+        for gap_start, gap_end in gaps:
+            article.fragments.filter(is_confirmed=False).filter(
+                Q(start_line__gte=gap_start, start_line__lte=gap_end) |
+                Q(end_line__gte=gap_start,   end_line__lte=gap_end)
+            ).delete()
+        # 清理无行号的旧格式未确认片段
+        article.fragments.filter(is_confirmed=False, start_line__isnull=True).delete()
 
-            # 清理新区间内的未确认片段（含无行号的旧格式片段）
-            article.fragments.filter(is_confirmed=False, start_line__gte=global_start).delete()
-            article.fragments.filter(is_confirmed=False, start_line__isnull=True).delete()
-        else:
-            # 初次切割或全部未确认：清除所有未确认，全文重切
-            article.fragments.filter(is_confirmed=False).delete()
-            global_start    = 0
-            overlap_context = None
-        # ── 智能重切割结束 ────────────────────────────────────────────────────
+        # ── 为每个缺口找前后上下文 ────────────────────────────────────────────
+        # 构建 {end_line: fragment} 和 {start_line: fragment} 两个查找表
+        by_end   = {f.end_line:   f for f in confirmed}
+        by_start = {f.start_line: f for f in confirmed}
 
-        new_content = '\n'.join(lines[global_start:])
-        if not new_content.strip():
-            return Response({'count': 0, 'fragments': [], 'message': '没有新内容需要分割'})
+        def _prev_fragment(gap_start: int):
+            """找缺口前方最近的已确认片段（end_line < gap_start）。"""
+            candidates = [f for f in confirmed if f.end_line < gap_start]
+            return max(candidates, key=lambda f: f.end_line) if candidates else None
 
+        def _next_fragment(gap_end: int):
+            """找缺口后方最近的已确认片段（start_line > gap_end）。"""
+            candidates = [f for f in confirmed if f.start_line > gap_end]
+            return min(candidates, key=lambda f: f.start_line) if candidates else None
+
+        # ── 逐缺口调用 LLM ──────────────────────────────────────────────────
         try:
             provider = _get_provider(llm_config)
-            segment_results = segment_article(
-                new_content,
-                provider,
-                global_start=global_start,
-                overlap_context=overlap_context,
-            )
         except Exception as e:
-            logger.exception('Article segmentation failed')
-            err_str = str(e)
-            if '503' in err_str or 'UNAVAILABLE' in err_str:
-                return Response({'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
-            return Response({'error': f'切割失败：{err_str}'}, status=500)
+            return Response({'error': f'获取 LLM provider 失败：{str(e)}'}, status=400)
 
-        if not segment_results:
+        all_new_fragments: list[Fragment] = []
+        # order 用 start_line 保证全局读取顺序
+        next_order_base = (
+            article.fragments.aggregate(max_order=Max('order'))['max_order'] or -1
+        ) + 1
+
+        for gap_idx, (gap_start, gap_end) in enumerate(gaps):
+            gap_content = '\n'.join(lines[gap_start:gap_end + 1])
+            if not gap_content.strip():
+                continue
+
+            prev_frag = _prev_fragment(gap_start)
+            next_frag = _next_fragment(gap_end)
+
+            try:
+                segment_results = segment_article(
+                    gap_content,
+                    provider,
+                    global_start=gap_start,
+                    prev_context=prev_frag.text if prev_frag else None,
+                    next_context=next_frag.text if next_frag else None,
+                )
+            except Exception as e:
+                logger.exception('Segmentation failed for gap %d-%d', gap_start, gap_end)
+                err_str = str(e)
+                if '503' in err_str or 'UNAVAILABLE' in err_str:
+                    return Response({'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
+                return Response({'error': f'切割失败：{err_str}'}, status=500)
+
+            if not segment_results:
+                logger.warning('Empty segment result for gap %d-%d', gap_start, gap_end)
+                continue
+
+            for seg in segment_results:
+                f = Fragment.objects.create(
+                    owner=request.user,
+                    article=article,
+                    character=article.character,
+                    text=seg['text'],
+                    fragment_type=seg.get('type', 'story'),
+                    start_line=seg['start'],
+                    end_line=seg['end'],
+                    order=seg['start'],  # 用 start_line 作 order，保证全文阅读顺序
+                )
+                all_new_fragments.append(f)
+
+        if not all_new_fragments:
             return Response({'error': 'Gemini 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
 
-        # order 接续已有片段的最大值
-        max_order = article.fragments.aggregate(max_order=Max('order'))['max_order']
-        next_order = (max_order + 1) if max_order is not None else 0
-
-        fragments = []
-        for i, seg in enumerate(segment_results):
-            f = Fragment.objects.create(
-                owner=request.user,
-                article=article,
-                character=article.character,
-                text=seg['text'],
-                fragment_type=seg.get('type', 'story'),
-                start_line=seg['start'],
-                end_line=seg['end'],
-                order=next_order + i,
-            )
-            fragments.append(f)
-
         return Response({
-            'count':     len(fragments),
-            'fragments': FragmentSerializer(fragments, many=True).data,
+            'count':     len(all_new_fragments),
+            'fragments': FragmentSerializer(all_new_fragments, many=True).data,
         })
 
 
 class ArticleBatchConfirmView(APIView):
-    """POST /api/examples/articles/:id/confirm-all/ — 批量向量化入库"""
+    """POST /api/examples/articles/:id/confirm-all/"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, article_id):
@@ -211,21 +280,17 @@ class ArticleBatchConfirmView(APIView):
                 'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
             }, status=400)
 
-        # 只处理 story 类型、未确认、有标签的片段（skip 片段不入库）
         to_confirm = article.fragments.filter(
-            is_confirmed=False,
-            fragment_type='story',
+            is_confirmed=False, fragment_type='story',
         ).exclude(tags={})
 
-        confirmed_ids = []
-        error_ids     = []
-
+        confirmed_ids, error_ids = [], []
         for fragment in to_confirm:
             try:
                 tag_text = tags_to_text(fragment.tags)
                 if not tag_text:
                     continue
-                fragment.embedding   = get_embedding(tag_text, api_key)
+                fragment.embedding    = get_embedding(tag_text, api_key)
                 fragment.is_confirmed = True
                 fragment.save()
                 confirmed_ids.append(str(fragment.id))
@@ -264,7 +329,6 @@ class FragmentDetailView(APIView):
         return Response(FragmentSerializer(fragment).data)
 
     def patch(self, request, fragment_id):
-        """更新片段文本或标签。修改后重置确认状态。"""
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
         changed = False
         if 'text' in request.data:
@@ -286,7 +350,6 @@ class FragmentDetailView(APIView):
 
 
 class FragmentInferTagsView(APIView):
-    """POST /api/examples/fragments/:id/infer-tags/ — LLM 标签推断"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, fragment_id):
@@ -297,7 +360,6 @@ class FragmentInferTagsView(APIView):
         except ValueError as e:
             return Response({'error': str(e)}, status=400)
 
-        # 前端传入当前界面语言（'zh' 或 'en'），默认 'zh' 兼容旧请求
         language = request.data.get('lang', 'zh')
         if language not in ('zh', 'en'):
             language = 'zh'
@@ -317,7 +379,6 @@ class FragmentInferTagsView(APIView):
 
 
 class FragmentConfirmView(APIView):
-    """POST /api/examples/fragments/:id/confirm/ — 单片段向量化入库"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, fragment_id):
@@ -325,7 +386,6 @@ class FragmentConfirmView(APIView):
 
         if fragment.fragment_type == 'skip':
             return Response({'error': 'skip 类型片段不需要入库'}, status=400)
-
         if not fragment.tags:
             return Response({'error': '请先为片段打标签再确认入库'}, status=400)
 
