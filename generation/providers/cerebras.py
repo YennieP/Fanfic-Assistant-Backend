@@ -69,6 +69,7 @@ class CerebrasProvider(BaseProvider):
         usage = response.usage
         return CompleteResult(
             text=text,
-            prompt_tokens=usage.prompt_tokens     if usage else 0,
+            model=self.MODEL,
+            prompt_tokens=usage.prompt_tokens         if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
         )
