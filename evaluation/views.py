@@ -32,32 +32,33 @@ def _parse_judge_response(result_text: str) -> tuple[int, str]:
     """
     clean = re.sub(r'```(?:json)?\s*|\s*```', '', result_text).strip()
 
-    # 尝试直接解析
-    try:
-        result = json.loads(clean)
-    except json.JSONDecodeError:
-        # 兜底1：转义字面换行符
+    # 先尝试标准 JSON 解析
+    for attempt in [clean, re.sub(r'(?<!\\)\n', r'\\n', clean)]:
         try:
-            clean_escaped = re.sub(r'(?<!\\)\n', r'\\n', clean)
-            result = json.loads(clean_escaped)
-        except json.JSONDecodeError:
-            # 兜底2：从文本中提取第一个 {...} 块（llama 模型常在 JSON 前后加文字）
-            match = re.search(r'\{.*\}', clean, re.DOTALL)
-            if not match:
-                raise ValueError(f'无法从响应中提取 JSON：{clean[:200]}')
-            try:
-                result = json.loads(match.group())
-            except json.JSONDecodeError:
-                escaped = re.sub(r'(?<!\\)\n', r'\\n', match.group())
-                result = json.loads(escaped)
+            result = json.loads(attempt)
+            score = int(result['score'])
+            reasoning = str(result['reasoning']).replace('\\n', '\n').strip()
+            if not 0 <= score <= 10:
+                raise ValueError(f'score {score} out of range')
+            return score, reasoning
+        except (json.JSONDecodeError, KeyError):
+            continue
 
-    score = int(result['score'])
-    reasoning = str(result['reasoning']).replace('\\n', '\n').strip()
+    # 兜底：LLM 在 reasoning 中输出了未转义的双引号，导致 JSON 损坏
+    # 用 regex 分别提取 score 和 reasoning，不依赖 JSON 结构完整性
+    score_match = re.search(r'"score"\s*:\s*(\d+)', clean)
+    reas_match = re.search(r'"reasoning"\s*:\s*"', clean)
 
-    if not 0 <= score <= 10:
-        raise ValueError(f'score {score} out of range')
+    if score_match and reas_match:
+        score = int(score_match.group(1))
+        if not 0 <= score <= 10:
+            raise ValueError(f'score {score} out of range')
+        # 取 "reasoning": " 之后的所有内容，去掉末尾的 "} 残留
+        reasoning_raw = clean[reas_match.end():]
+        reasoning = re.sub(r'"\s*}?\s*$', '', reasoning_raw).strip()
+        return score, reasoning
 
-    return score, reasoning
+    raise ValueError(f'无法解析 judge 响应：{clean[:300]}')
 
 
 def _get_provider(llm_config, request_user):
