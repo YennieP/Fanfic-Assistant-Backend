@@ -236,12 +236,13 @@ class ArticleSegmentView(APIView):
                     global_start=gap_start,
                     prev_context=prev_frag.text if prev_frag else None,
                     next_context=next_frag.text if next_frag else None,
+                    user=request.user,
                 )
             except Exception as e:
                 logger.exception('Segmentation failed for gap %d-%d', gap_start, gap_end)
                 err_str = str(e)
                 if '503' in err_str or 'UNAVAILABLE' in err_str:
-                    return Response({'error': 'Gemini 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
+                    return Response({'error': 'LLM 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
                 return Response({'error': f'切割失败：{err_str}'}, status=500)
 
             if not segment_results:
@@ -262,7 +263,7 @@ class ArticleSegmentView(APIView):
                 all_new_fragments.append(f)
 
         if not all_new_fragments:
-            return Response({'error': 'Gemini 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
+            return Response({'error': 'LLM 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
 
         return Response({
             'count':     len(all_new_fragments),
@@ -406,7 +407,7 @@ class FragmentInferTagsView(APIView):
 
         try:
             provider = _get_provider(llm_config)
-            tags = infer_tags(fragment.text, provider, language=language)
+            tags = infer_tags(fragment.text, provider, language=language, user=request.user)
         except Exception as e:
             logger.exception('Tag inference failed')
             err_str = str(e)
