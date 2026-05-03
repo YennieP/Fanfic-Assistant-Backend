@@ -56,11 +56,22 @@ class BaseCard(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # ── 多语言支持 ──────────────────────────────────────────────────────────
+    # 同一角色的不同语言版本共享同一 canonical_id
+    # 存量数据通过迁移将 canonical_id 设为各自的 id
+    canonical_id = models.UUIDField(default=uuid.uuid4, db_index=True)
+    language = models.CharField(
+        max_length=8,
+        default='zh',
+        choices=[('zh', '中文'), ('en', 'English')],
+    )
+
     class Meta:
         ordering = ['-updated_at']
+        unique_together = [('owner', 'canonical_id', 'language')]
 
     def __str__(self):
-        return f'{self.name} ({self.fandom})'
+        return f'{self.name} ({self.fandom}) [{self.language}]'
 
 
 class AUMod(models.Model):

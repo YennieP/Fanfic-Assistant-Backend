@@ -32,7 +32,24 @@ class BaseCardViewSet(viewsets.ModelViewSet):
         return BaseCardSerializer
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        import uuid as uuid_module
+        # canonical_id 和 language 在 serializer 中为 read_only，
+        # 通过 request.data 手动读取，允许前端在创建翻译版本时指定这两个值。
+        # 普通新建角色时不传 canonical_id，后端自动生成新 UUID。
+        raw_canonical_id = self.request.data.get('canonical_id')
+        language = self.request.data.get('language', 'zh')
+
+        kwargs = {
+            'owner': self.request.user,
+            'language': language,
+        }
+        if raw_canonical_id:
+            try:
+                kwargs['canonical_id'] = uuid_module.UUID(str(raw_canonical_id))
+            except (ValueError, AttributeError):
+                pass  # 无效 UUID，让 model default 生成新的
+
+        serializer.save(**kwargs)
 
 
 class AUModViewSet(viewsets.ModelViewSet):

@@ -86,7 +86,8 @@ class BaseCardSerializer(serializers.ModelSerializer):
     class Meta:
         model = BaseCard
         fields = [
-            'id', 'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'card_author', 'version',
+            'id', 'canonical_id', 'language',
+            'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'card_author', 'version',
             'author_nicknames',
             'mbti', 'mbti_notes', 'core_values', 'core_fears', 'key_experiences',
             'quick_labels', 'behavioral_patterns', 'forbidden_behaviors',
@@ -96,7 +97,9 @@ class BaseCardSerializer(serializers.ModelSerializer):
             'au_mods',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        # canonical_id 和 language 只读：由 perform_create 从 request.data 写入，
+        # 防止通过 PATCH 修改已有记录的语言归属
+        read_only_fields = ['id', 'canonical_id', 'language', 'created_at', 'updated_at']
 
 
 class BaseCardListSerializer(serializers.ModelSerializer):
@@ -105,7 +108,8 @@ class BaseCardListSerializer(serializers.ModelSerializer):
     class Meta:
         model = BaseCard
         fields = [
-            'id', 'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'mbti',
+            'id', 'canonical_id', 'language',
+            'name', 'fandom', 'gender', 'gender_type', 'gender_pronoun', 'mbti',
             'quick_labels', 'au_mods',
             'created_at', 'updated_at',
         ]
