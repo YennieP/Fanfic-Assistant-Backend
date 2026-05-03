@@ -316,9 +316,14 @@ class ArticleBatchConfirmView(APIView):
 class FragmentListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    # views.py — FragmentListView.get() 修改
+
     def get(self, request):
-        character_id   = request.query_params.get('character_id')
-        confirmed_only = request.query_params.get('confirmed') == 'true'
+        character_id   = request.query_params.get('character') or request.query_params.get('character_id')
+        confirmed_only = (
+            request.query_params.get('is_confirmed') == 'true'
+            or request.query_params.get('confirmed') == 'true'
+        )
         qs = Fragment.objects.filter(owner=request.user).select_related('article', 'character')
         if character_id:
             qs = qs.filter(character_id=character_id)
