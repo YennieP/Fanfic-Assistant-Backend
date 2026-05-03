@@ -32,11 +32,24 @@ def _parse_judge_response(result_text: str) -> tuple[int, str]:
     """
     clean = re.sub(r'```(?:json)?\s*|\s*```', '', result_text).strip()
 
+    # 尝试直接解析
     try:
         result = json.loads(clean)
     except json.JSONDecodeError:
-        clean_escaped = re.sub(r'(?<!\\)\n', r'\\n', clean)
-        result = json.loads(clean_escaped)
+        # 兜底1：转义字面换行符
+        try:
+            clean_escaped = re.sub(r'(?<!\\)\n', r'\\n', clean)
+            result = json.loads(clean_escaped)
+        except json.JSONDecodeError:
+            # 兜底2：从文本中提取第一个 {...} 块（llama 模型常在 JSON 前后加文字）
+            match = re.search(r'\{.*\}', clean, re.DOTALL)
+            if not match:
+                raise ValueError(f'无法从响应中提取 JSON：{clean[:200]}')
+            try:
+                result = json.loads(match.group())
+            except json.JSONDecodeError:
+                escaped = re.sub(r'(?<!\\)\n', r'\\n', match.group())
+                result = json.loads(escaped)
 
     score = int(result['score'])
     reasoning = str(result['reasoning']).replace('\\n', '\n').strip()
