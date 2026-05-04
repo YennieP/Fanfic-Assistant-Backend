@@ -5,6 +5,7 @@ OpenAI SDK 兼容，需要 HTTP-Referer header
 API Key 申请：https://openrouter.ai/keys
 """
 import logging
+import httpx
 from openai import OpenAI
 import openai
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
@@ -29,6 +30,8 @@ class OpenRouterProvider(BaseProvider):
                 'HTTP-Referer': 'https://fanfic-assistant-production.up.railway.app',
                 'X-Title': 'Fanfic Assistant',
             },
+            # stream() 中途卡住时防止 gunicorn sync worker 因无法发送心跳而被 SIGKILL
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
         )
 
     def stream(self, system_prompt: str, user_prompt: str):
@@ -72,6 +75,12 @@ class OpenRouterProvider(BaseProvider):
                     continue
                 raise
 
+            except openai.APITimeoutError as e:
+                if attempt == 0 and not started:
+                    logger.warning('OpenRouter read timeout on attempt %d, retrying: %s', attempt + 1, e)
+                    continue
+                raise ProviderError('OpenRouter 响应超时，请稍后重试', code='generation_failed')
+
             except openai.APIConnectionError as e:
                 if attempt == 0 and not started:
                     logger.warning('OpenRouter connection error on attempt %d, retrying: %s', attempt + 1, e)
@@ -111,6 +120,12 @@ class OpenRouterProvider(BaseProvider):
                     logger.warning('OpenRouter %s on attempt %d, retrying: %s', e.status_code, attempt + 1, e)
                     continue
                 raise
+
+            except openai.APITimeoutError as e:
+                if attempt == 0:
+                    logger.warning('OpenRouter read timeout on attempt %d, retrying: %s', attempt + 1, e)
+                    continue
+                raise ProviderError('OpenRouter 响应超时，请稍后重试', code='generation_failed')
 
             except openai.APIConnectionError as e:
                 if attempt == 0:

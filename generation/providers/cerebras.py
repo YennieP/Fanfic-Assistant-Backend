@@ -4,6 +4,7 @@ Cerebras provider
 API Key 申请：https://cloud.cerebras.ai/
 """
 import logging
+import httpx
 from openai import OpenAI
 import openai
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
@@ -23,6 +24,8 @@ class CerebrasProvider(BaseProvider):
         self.client = OpenAI(
             api_key=api_key,
             base_url='https://api.cerebras.ai/v1',
+            # stream() 中途卡住时防止 gunicorn sync worker 因无法发送心跳而被 SIGKILL
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
         )
 
     def stream(self, system_prompt: str, user_prompt: str):
@@ -67,6 +70,12 @@ class CerebrasProvider(BaseProvider):
                     continue
                 raise
 
+            except openai.APITimeoutError as e:
+                if attempt == 0 and not started:
+                    logger.warning('Cerebras read timeout on attempt %d, retrying: %s', attempt + 1, e)
+                    continue
+                raise ProviderError('Cerebras 响应超时，请稍后重试', code='generation_failed')
+
             except openai.APIConnectionError as e:
                 if attempt == 0 and not started:
                     logger.warning('Cerebras connection error on attempt %d, retrying: %s', attempt + 1, e)
@@ -106,6 +115,12 @@ class CerebrasProvider(BaseProvider):
                     logger.warning('Cerebras %s on attempt %d, retrying: %s', e.status_code, attempt + 1, e)
                     continue
                 raise
+
+            except openai.APITimeoutError as e:
+                if attempt == 0:
+                    logger.warning('Cerebras read timeout on attempt %d, retrying: %s', attempt + 1, e)
+                    continue
+                raise ProviderError('Cerebras 响应超时，请稍后重试', code='generation_failed')
 
             except openai.APIConnectionError as e:
                 if attempt == 0:
