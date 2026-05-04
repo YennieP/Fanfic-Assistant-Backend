@@ -2,8 +2,8 @@ import time
 import logging
 from google import genai
 from google.genai import types
-from google.genai.errors import ServerError
-from .base import BaseProvider, UsageInfo, CompleteResult
+from google.genai.errors import ServerError, ClientError
+from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ class GeminiProvider(BaseProvider):
             except StopIteration:
                 # 模型返回了空响应，不重试
                 break
+            except ClientError as e:
+                # 4xx 错误不重试：401 = Key 无效，其余直接 raise
+                if e.code == 401:
+                    raise ProviderError('Gemini API Key 无效', code='provider_key_invalid')
+                raise
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 32)
@@ -68,7 +73,10 @@ class GeminiProvider(BaseProvider):
                 else:
                     raise
         else:
-            raise last_error
+            # 7 次重试全部失败
+            if last_error and getattr(last_error, 'code', None) == 429:
+                raise ProviderError('Gemini 免费额度暂时耗尽，请稍后再试', code='provider_quota_daily')
+            raise ProviderError('Gemini 服务暂时不可用，请稍后再试', code='generation_failed')
 
         if stream_iter is None:
             # 7 次重试全部失败（last_error 已在上方 raise，此处不可达）
@@ -111,6 +119,10 @@ class GeminiProvider(BaseProvider):
                     prompt_tokens=usage.prompt_token_count if usage else 0,
                     completion_tokens=usage.candidates_token_count if usage else 0,
                 )
+            except ClientError as e:
+                if e.code == 401:
+                    raise ProviderError('Gemini API Key 无效', code='provider_key_invalid')
+                raise
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 4)
@@ -123,4 +135,6 @@ class GeminiProvider(BaseProvider):
                 else:
                     raise
 
-        raise last_error
+        if last_error and getattr(last_error, 'code', None) == 429:
+            raise ProviderError('Gemini 免费额度暂时耗尽，请稍后再试', code='provider_quota_daily')
+        raise ProviderError('Gemini 服务暂时不可用，请稍后再试', code='generation_failed')
