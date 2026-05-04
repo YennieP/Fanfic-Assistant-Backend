@@ -4,8 +4,6 @@ from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
 
 logger = logging.getLogger(__name__)
 
-# Groq 的 429 = 日配额耗尽（100K tokens/天），重试无意义，直接告知用户
-# 5xx = 服务端瞬发错误，值得重试 1 次
 _RETRYABLE_STATUS = {500, 502, 503}
 
 
@@ -13,10 +11,6 @@ class GroqProvider(BaseProvider):
     MODEL = 'llama-3.3-70b-versatile'
 
     def stream(self, system_prompt: str, user_prompt: str):
-        """
-        重试策略：first-chunk 阶段（started=False）发生 5xx 或连接错误时重试 1 次。
-        429 配额耗尽不重试，直接返回用户可读错误。
-        """
         client = groq_sdk.Groq(api_key=self.api_key)
 
         for attempt in range(2):
@@ -47,13 +41,13 @@ class GroqProvider(BaseProvider):
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
-                return  # 成功完成
+                return
 
             except groq_sdk.AuthenticationError:
-                raise ProviderError('Groq API Key 无效，请在设置页重新配置')
+                raise ProviderError('Groq API Key 无效', code='provider_key_invalid')
 
             except groq_sdk.RateLimitError:
-                raise ProviderError('Groq 今日免费额度（100K tokens）已用完，请明天再试')
+                raise ProviderError('Groq 今日免费额度（100K tokens）已用完', code='provider_quota_daily')
 
             except groq_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0 and not started:
@@ -91,10 +85,10 @@ class GroqProvider(BaseProvider):
                 )
 
             except groq_sdk.AuthenticationError:
-                raise ProviderError('Groq API Key 无效，请在设置页重新配置')
+                raise ProviderError('Groq API Key 无效', code='provider_key_invalid')
 
             except groq_sdk.RateLimitError:
-                raise ProviderError('Groq 今日免费额度（100K tokens）已用完，请明天再试')
+                raise ProviderError('Groq 今日免费额度（100K tokens）已用完', code='provider_quota_daily')
 
             except groq_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0:

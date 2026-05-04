@@ -20,16 +20,26 @@ class CompleteResult:
 
 class ProviderError(Exception):
     """
-    用户可读的 provider 业务错误，message 可直接展示给用户。
+    用户可读的 provider 业务错误。
 
-    与技术性异常（网络超时、SDK 内部 bug）的区别：
-    - ProviderError：预期内的业务错误（Key 无效、配额耗尽），logger.warning 即可
-    - 其他 Exception：非预期技术异常，需要 logger.exception 记录完整 traceback
+    code 字段为机器可读的错误类型标识，由前端通过 i18n 表映射为对应语言的展示文案。
+    message 保留中文描述，仅用于服务端日志，不直接展示给用户。
 
-    views.py 的 except 块对两者分级处理，SSE error 事件的 message 均使用 str(e)，
-    ProviderError 的 message 会直接呈现给用户，因此必须是中文可读文案。
+    当前错误码：
+      provider_key_invalid   — API Key 无效（401）
+      provider_rate_limit    — 请求频率超限（Anthropic 429）
+      provider_quota_daily   — 今日配额耗尽（Groq / OpenRouter 429）
+      provider_quota_monthly — 本月配额耗尽（Cerebras 429）
+      generation_failed      — 非预期技术异常（兜底，由 views.py 使用）
+
+    与普通 Exception 的区别：
+      ProviderError → views.py 用 logger.warning，SSE error 携带 code
+      Exception     → views.py 用 logger.exception，SSE error 使用 generation_failed 兜底
     """
-    pass
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
 
 
 class BaseProvider(ABC):

@@ -233,15 +233,16 @@ class GenerateStreamView(APIView):
                 yield f'data: {done_data}\n\n'
 
             except ProviderError as e:
-                # 预期内的业务错误（Key 无效、配额耗尽等），message 已是用户可读文案
-                logger.warning('Provider business error: %s', e)
-                data = json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)
+                # 预期内的业务错误（Key 无效、配额耗尽等）
+                # code 由前端通过 i18n 表映射为对应语言的文案，message 仅用于服务端日志
+                logger.warning('Provider business error [%s]: %s', e.code, e)
+                data = json.dumps({'type': 'error', 'code': e.code}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
 
             except Exception as e:
-                # 非预期技术异常，记录完整 traceback 供排查
+                # 非预期技术异常，记录完整 traceback 供排查，前端使用 generation_failed 兜底文案
                 logger.exception('LLM streaming unexpected error')
-                data = json.dumps({'type': 'error', 'message': '生成失败，请稍后重试'}, ensure_ascii=False)
+                data = json.dumps({'type': 'error', 'code': 'generation_failed'}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')

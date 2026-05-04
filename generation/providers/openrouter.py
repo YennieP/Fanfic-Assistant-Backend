@@ -1,6 +1,6 @@
 """
 OpenRouter provider — meta-llama/llama-3.3-70b-instruct:free
-免费模型 200 req/天（充值 $10 后升至 1000 req/天），11+ 个免费模型可选
+免费模型 200 req/天（充值 $10 后升至 1000 req/天）
 OpenAI SDK 兼容，需要 HTTP-Referer header
 API Key 申请：https://openrouter.ai/keys
 """
@@ -11,10 +11,7 @@ from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
 
 logger = logging.getLogger(__name__)
 
-# OpenRouter 特别说明：
-# 502 = OpenRouter 转发到上游模型时发生错误，短暂重试有效
-# 503 = 上游模型暂时不可用，短暂重试有效
-# 429 = 今日 200 req 免费配额耗尽，重试无意义
+# 502 = OpenRouter 转发上游模型失败，较常见，值得重试
 _RETRYABLE_STATUS = {500, 502, 503}
 
 
@@ -35,11 +32,6 @@ class OpenRouterProvider(BaseProvider):
         )
 
     def stream(self, system_prompt: str, user_prompt: str):
-        """
-        重试策略：first-chunk 阶段（started=False）发生 5xx/502/503 或连接错误时重试 1 次。
-        OpenRouter 的 502 较常见（上游模型负载波动），是重试的主要场景。
-        429 今日配额耗尽不重试，直接返回用户可读错误。
-        """
         for attempt in range(2):
             started = False
             prompt_tokens = 0
@@ -66,13 +58,13 @@ class OpenRouterProvider(BaseProvider):
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
-                return  # 成功完成
+                return
 
             except openai.AuthenticationError:
-                raise ProviderError('OpenRouter API Key 无效，请在设置页重新配置')
+                raise ProviderError('OpenRouter API Key 无效', code='provider_key_invalid')
 
             except openai.RateLimitError:
-                raise ProviderError('OpenRouter 今日免费请求次数（200 次）已用完，请明天再试')
+                raise ProviderError('OpenRouter 今日免费请求次数（200 次）已用完', code='provider_quota_daily')
 
             except openai.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0 and not started:
@@ -87,10 +79,7 @@ class OpenRouterProvider(BaseProvider):
                 raise
 
     def complete(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = 1000,
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 1000,
     ) -> CompleteResult:
         for attempt in range(2):
             try:
@@ -112,10 +101,10 @@ class OpenRouterProvider(BaseProvider):
                 )
 
             except openai.AuthenticationError:
-                raise ProviderError('OpenRouter API Key 无效，请在设置页重新配置')
+                raise ProviderError('OpenRouter API Key 无效', code='provider_key_invalid')
 
             except openai.RateLimitError:
-                raise ProviderError('OpenRouter 今日免费请求次数（200 次）已用完，请明天再试')
+                raise ProviderError('OpenRouter 今日免费请求次数（200 次）已用完', code='provider_quota_daily')
 
             except openai.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0:

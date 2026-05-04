@@ -44,10 +44,10 @@ class AnthropicProvider(BaseProvider):
                 return  # 成功完成
 
             except anthropic_sdk.AuthenticationError:
-                raise ProviderError('Anthropic API Key 无效，请在设置页重新配置')
+                raise ProviderError('Anthropic API Key 无效', code='provider_key_invalid')
 
             except anthropic_sdk.RateLimitError:
-                raise ProviderError('Anthropic 请求频率超限，请稍后再试')
+                raise ProviderError('Anthropic 请求频率超限', code='provider_rate_limit')
 
             except anthropic_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0 and not started:
@@ -83,10 +83,10 @@ class AnthropicProvider(BaseProvider):
                 )
 
             except anthropic_sdk.AuthenticationError:
-                raise ProviderError('Anthropic API Key 无效，请在设置页重新配置')
+                raise ProviderError('Anthropic API Key 无效', code='provider_key_invalid')
 
             except anthropic_sdk.RateLimitError:
-                raise ProviderError('Anthropic 请求频率超限，请稍后再试')
+                raise ProviderError('Anthropic 请求频率超限', code='provider_rate_limit')
 
             except anthropic_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0:
