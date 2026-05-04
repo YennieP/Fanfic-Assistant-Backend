@@ -11,11 +11,10 @@ from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
+from logs.decorators import log_llm_call
 from .providers.groq import GroqProvider
 from .providers.cerebras import CerebrasProvider
 from .providers.openrouter import OpenRouterProvider
-from .providers.base import ProviderError
-from logs.decorators import log_llm_call
 from users.models import UserProviderKey
 
 
@@ -133,7 +132,7 @@ class GenerateStreamView(APIView):
     def post(self, request):
         if _is_rate_limited(request.user.id):
             return StreamingHttpResponse(
-                _error_stream('请求过于频繁，请稍后再试'),
+                _error_stream('rate_limited'),
                 content_type='text/event-stream',
             )
 
@@ -141,7 +140,7 @@ class GenerateStreamView(APIView):
             llm_config = request.user.llm_config
         except Exception:
             return StreamingHttpResponse(
-                _error_stream('未配置 API Key，请先在设置页配置'),
+                _error_stream('no_api_key'),
                 content_type='text/event-stream',
             )
 
@@ -152,14 +151,14 @@ class GenerateStreamView(APIView):
         forced_fragment_id = request.data.get('forced_fragment_id')
 
         if not character_id:
-            return StreamingHttpResponse(_error_stream('请选择角色'), content_type='text/event-stream')
+            return StreamingHttpResponse(_error_stream('validation_error'), content_type='text/event-stream')
         if not scene_input.get('location') or not scene_input.get('intent'):
-            return StreamingHttpResponse(_error_stream('场景地点和写作意图为必填项'), content_type='text/event-stream')
+            return StreamingHttpResponse(_error_stream('validation_error'), content_type='text/event-stream')
 
         try:
             character = BaseCard.objects.get(id=character_id, owner=request.user)
         except BaseCard.DoesNotExist:
-            return StreamingHttpResponse(_error_stream('角色不存在'), content_type='text/event-stream')
+            return StreamingHttpResponse(_error_stream('character_not_found'), content_type='text/event-stream')
 
         au_mod = None
         if au_mod_id:
@@ -173,7 +172,7 @@ class GenerateStreamView(APIView):
             api_key = decrypt_key(key_obj.api_key_encrypted)
         except Exception:
             return StreamingHttpResponse(
-                _error_stream(f'未找到 {llm_config.provider} 的 API Key，请在设置页保存'),
+                _error_stream('no_api_key'),
                 content_type='text/event-stream',
             )
 
@@ -231,18 +230,9 @@ class GenerateStreamView(APIView):
                     'candidates': [_fragment_to_candidate(f) for f in all_candidates],
                 })
                 yield f'data: {done_data}\n\n'
-
-            except ProviderError as e:
-                # 预期内的业务错误（Key 无效、配额耗尽等）
-                # code 由前端通过 i18n 表映射为对应语言的文案，message 仅用于服务端日志
-                logger.warning('Provider business error [%s]: %s', e.code, e)
-                data = json.dumps({'type': 'error', 'code': e.code}, ensure_ascii=False)
-                yield f'data: {data}\n\n'
-
             except Exception as e:
-                # 非预期技术异常，记录完整 traceback 供排查，前端使用 generation_failed 兜底文案
-                logger.exception('LLM streaming unexpected error')
-                data = json.dumps({'type': 'error', 'code': 'generation_failed'}, ensure_ascii=False)
+                logger.exception('LLM streaming error')
+                data = json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
@@ -251,6 +241,9 @@ class GenerateStreamView(APIView):
         return response
 
 
-def _error_stream(message: str):
-    data = json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)
+def _error_stream(code: str):
+    """Yield a single SSE error event with a machine-readable code.
+    Frontend maps code → i18n display text via t.writing.generationErrors[code].
+    """
+    data = json.dumps({'type': 'error', 'code': code}, ensure_ascii=False)
     yield f'data: {data}\n\n'
