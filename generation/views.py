@@ -11,10 +11,11 @@ from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
-from logs.decorators import log_llm_call
 from .providers.groq import GroqProvider
 from .providers.cerebras import CerebrasProvider
 from .providers.openrouter import OpenRouterProvider
+from .providers.base import ProviderError
+from logs.decorators import log_llm_call
 from users.models import UserProviderKey
 
 
@@ -230,9 +231,17 @@ class GenerateStreamView(APIView):
                     'candidates': [_fragment_to_candidate(f) for f in all_candidates],
                 })
                 yield f'data: {done_data}\n\n'
-            except Exception as e:
-                logger.exception('LLM streaming error')
+
+            except ProviderError as e:
+                # 预期内的业务错误（Key 无效、配额耗尽等），message 已是用户可读文案
+                logger.warning('Provider business error: %s', e)
                 data = json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)
+                yield f'data: {data}\n\n'
+
+            except Exception as e:
+                # 非预期技术异常，记录完整 traceback 供排查
+                logger.exception('LLM streaming unexpected error')
+                data = json.dumps({'type': 'error', 'message': '生成失败，请稍后重试'}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
