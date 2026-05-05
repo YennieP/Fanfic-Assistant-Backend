@@ -2,6 +2,8 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+handler500 = 'core.handler500.server_error'
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('users.urls')),

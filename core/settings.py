@@ -98,6 +98,7 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
+    'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
@@ -122,3 +123,54 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
 
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
+
+# ── 日志配置 ──────────────────────────────────────────────────────────────────
+# Railway 部署时所有输出通过 stdout 收集，StreamHandler 是最合适的 handler。
+# LOG_LEVEL 可通过环境变量覆盖（默认 WARNING，不记录 Django 内部 DEBUG/INFO 噪音）。
+# 应用层日志（generation/evaluation/examples 等）继承 root，级别 = LOG_LEVEL。
+# django.request 独立配置：ERROR 级别记录 5xx，400-499 不记录（属于正常业务）。
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'WARNING')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            # asctime levelname name: message
+            # 例：2026-05-04 11:00:00,123 ERROR generation.providers.gemini: Gemini 503 ...
+            'format': '{asctime} {levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard',
+        },
+    },
+    'root': {
+        # 所有未单独配置的 logger 的兜底 handler
+        'handlers': ['console'],
+        'level': LOG_LEVEL,
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            # INFO：记录启动信息和请求日志（Railway log panel 可见）
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            # ERROR：只记录 5xx，4xx（用户错误）不记录
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        'django.db.backends': {
+            'handlers': ['console'],
+            # WARNING：记录慢查询等数据库异常，不记录每条 SQL（太噪）
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
