@@ -122,6 +122,10 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
 
+# CSRF：信任来自这些域名的请求（Django Admin 登录需要）
+# 环境变量示例：https://web-production-29e7.up.railway.app,https://your-frontend.up.railway.app
+CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173').split(',')
+
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
 
 # ── 日志配置 ──────────────────────────────────────────────────────────────────
