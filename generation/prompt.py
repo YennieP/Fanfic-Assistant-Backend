@@ -21,7 +21,7 @@ def build_prompt(
       空列表时行为与 Phase 1 完全一致（向后兼容）
     """
     system = _build_system(character, au_mod, style_fragments, active_rel_contexts, output_language)
-    user = _build_user(scene_input)
+    user = _build_user(scene_input, output_language)
     return system, user
 
 
@@ -175,50 +175,100 @@ def _build_system(
             lines.append(fragment.text)
     # ── 注入结束 ────────────────────────────────────────────────────────────
 
+    # 尾部语言指令：LLM 对靠近末尾的指令响应更可靠
+    # 用强硬措辞再次强调，防止被大量中文 character card 内容覆盖
+    if output_language == 'en':
+        lines.append(
+            '\n[MANDATORY OUTPUT LANGUAGE INSTRUCTION]\n'
+            'You MUST write the ENTIRE response in English ONLY. '
+            'The character card above is written in Chinese for reference only. '
+            'Your output text must be in English. '
+            'Do NOT write any Chinese characters in your response.'
+        )
+    else:
+        lines.append(
+            '\n【语言输出指令（强制）】\n'
+            '全文必须使用简体中文创作，不得出现繁体字或其他语言。'
+        )
+
     return '\n'.join(lines)
 
 
-_LENGTH_MAP = {
-    'short': '短篇（300字以内）',
-    'medium': '中篇（300～800字）',
-    'long': '长篇（800字以上）',
-}
+def _build_user(scene_input: dict, output_language: str = 'zh') -> str:
+    if output_language == 'en':
+        labels = {
+            'intro':      'Please write based on the following scene:',
+            'location':   'Location',
+            'chars':      'Present characters',
+            'secondary':  'Background characters',
+            'time':       'Time',
+            'tone':       'Tone',
+            'perspective':'Perspective',
+            'scene_role': 'Scene role',
+            'target':     'Target state',
+            'length':     'Length',
+            'intent':     'Writing intent',
+            'restrict':   '[RESTRICTIONS FOR THIS SCENE]',
+        }
+        length_map = {
+            'short':  'Short (under 300 chars)',
+            'medium': 'Medium (300–800 chars)',
+            'long':   'Long (800+ chars)',
+        }
+    else:
+        labels = {
+            'intro':      '请根据以下场景信息创作：',
+            'location':   '地点',
+            'chars':      '主要在场角色',
+            'secondary':  '次要/背景角色',
+            'time':       '时间',
+            'tone':       '基调',
+            'perspective':'叙述视角',
+            'scene_role': '场景作用',
+            'target':     '目标状态',
+            'length':     '篇幅',
+            'intent':     '写作意图',
+            'restrict':   '【本场景禁止出现】',
+        }
+        length_map = {
+            'short':  '短篇（300字以内）',
+            'medium': '中篇（300～800字）',
+            'long':   '长篇（800字以上）',
+        }
 
-
-def _build_user(scene_input: dict) -> str:
-    lines = ['请根据以下场景信息创作：', '']
+    lines = [labels['intro'], '']
 
     if scene_input.get('location'):
-        lines.append(f'地点：{scene_input["location"]}')
+        lines.append(f'{labels["location"]}：{scene_input["location"]}')
 
     chars = scene_input.get('characters', [])
     if chars:
-        lines.append(f'主要在场角色：{", ".join(chars)}')
+        lines.append(f'{labels["chars"]}：{", ".join(chars)}')
 
     secondary = scene_input.get('secondary_characters', [])
     if secondary:
-        lines.append(f'次要/背景角色：{", ".join(secondary)}')
+        lines.append(f'{labels["secondary"]}：{", ".join(secondary)}')
 
     if scene_input.get('time'):
-        lines.append(f'时间：{scene_input["time"]}')
+        lines.append(f'{labels["time"]}：{scene_input["time"]}')
     if scene_input.get('tone'):
-        lines.append(f'基调：{scene_input["tone"]}')
+        lines.append(f'{labels["tone"]}：{scene_input["tone"]}')
     if scene_input.get('perspective'):
-        lines.append(f'叙述视角：{scene_input["perspective"]}')
+        lines.append(f'{labels["perspective"]}：{scene_input["perspective"]}')
 
     if scene_input.get('scene_role'):
-        lines.append(f'场景作用：{scene_input["scene_role"]}')
+        lines.append(f'{labels["scene_role"]}：{scene_input["scene_role"]}')
     if scene_input.get('target_state'):
-        lines.append(f'目标状态：{scene_input["target_state"]}')
+        lines.append(f'{labels["target"]}：{scene_input["target_state"]}')
     if scene_input.get('desired_length'):
-        label = _LENGTH_MAP.get(scene_input['desired_length'], '')
+        label = length_map.get(scene_input['desired_length'], '')
         if label:
-            lines.append(f'篇幅：{label}')
+            lines.append(f'{labels["length"]}：{label}')
 
     if scene_input.get('intent'):
-        lines.append(f'\n写作意图：{scene_input["intent"]}')
+        lines.append(f'\n{labels["intent"]}：{scene_input["intent"]}')
 
     if scene_input.get('scene_restrictions'):
-        lines.append(f'\n【本场景禁止出现】\n{scene_input["scene_restrictions"]}')
+        lines.append(f'\n{labels["restrict"]}\n{scene_input["scene_restrictions"]}')
 
     return '\n'.join(lines)

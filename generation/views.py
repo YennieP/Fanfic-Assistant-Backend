@@ -147,7 +147,8 @@ class GenerateStreamView(APIView):
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
         scene_input = request.data.get('scene_input', {})
-        output_language = request.data.get('output_language', 'zh')
+        # 兜底同时支持 snake_case 和 camelCase（取决于 DRF parser 配置）
+        output_language = request.data.get('output_language') or request.data.get('outputLanguage', 'zh')
         active_relationship_ids = request.data.get('active_relationship_ids', [])
         forced_fragment_id = request.data.get('forced_fragment_id')
 
