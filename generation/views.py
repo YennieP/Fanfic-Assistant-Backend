@@ -147,6 +147,7 @@ class GenerateStreamView(APIView):
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
         scene_input = request.data.get('scene_input', {})
+        output_language = request.data.get('output_language', 'zh')
         active_relationship_ids = request.data.get('active_relationship_ids', [])
         forced_fragment_id = request.data.get('forced_fragment_id')
 
@@ -204,7 +205,8 @@ class GenerateStreamView(APIView):
         )
 
         system_prompt, user_prompt = build_prompt(
-            character, au_mod, scene_input, style_fragments, active_rel_contexts
+            character, au_mod, scene_input, style_fragments, active_rel_contexts,
+            output_language=output_language,
         )
 
         generation_id = uuid.uuid4()

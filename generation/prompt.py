@@ -7,15 +7,20 @@ def build_prompt(
     scene_input: dict,
     style_fragments: list | None = None,
     active_rel_contexts: list | None = None,
+    output_language: str = 'zh',
 ) -> tuple[str, str]:
     """
     返回 (system_prompt, user_prompt)
+
+    output_language: 生成文本的目标语言（'zh' = 简体中文，'en' = English）
+      默认 'zh'，向后兼容。
+      前端写作页「输出语言」下拉传入，优先于 LLM 自行判断（实测不注入时会输出繁体中文）。
 
     active_rel_contexts: [(Relationship, RelationshipMembership | None), ...]
       来自 generation/views.py 的 _get_active_rel_contexts()
       空列表时行为与 Phase 1 完全一致（向后兼容）
     """
-    system = _build_system(character, au_mod, style_fragments, active_rel_contexts)
+    system = _build_system(character, au_mod, style_fragments, active_rel_contexts, output_language)
     user = _build_user(scene_input)
     return system, user
 
@@ -25,6 +30,7 @@ def _build_system(
     au_mod: AUMod | None,
     style_fragments: list | None = None,
     active_rel_contexts: list | None = None,
+    output_language: str = 'zh',
 ) -> str:
     if character.gender and character.gender != 'other':
         pronoun = character.gender
@@ -38,9 +44,21 @@ def _build_system(
         if pronoun else ''
     )
 
+    # 语言指令：明确注入，避免 LLM 自行判断输出语言（实测不注入时会输出繁体中文）
+    # 放在 system prompt 第一行，优先级最高
+    if output_language == 'en':
+        lang_instruction = 'Write the entire text in English. Do not use any other language.'
+        role_intro = f'You are a professional fanfiction writing assistant. Follow the character settings strictly and do not violate character limits.'
+        narration_instruction = f'Use third-person narration. Write naturally with emotions matching the character. {pronoun_instruction}Start writing directly without explaining your approach.'
+    else:
+        lang_instruction = '全文使用简体中文创作，不得使用繁体中文或其他语言。'
+        role_intro = '你是一个专业的中文同人文写作助手。严格依照以下角色设定创作，不得违反人设红线。'
+        narration_instruction = f'用第三人称叙述，语言自然流畅，情绪表达符合角色特质。{pronoun_instruction}直接开始创作，不解释思路。'
+
     lines = [
-        '你是一个专业的中文同人文写作助手。严格依照以下角色设定创作，不得违反人设红线。',
-        f'用第三人称叙述，语言自然流畅，情绪表达符合角色特质。{pronoun_instruction}直接开始创作，不解释思路。',
+        lang_instruction,
+        role_intro,
+        narration_instruction,
         '',
         '【角色设定】',
         f'角色名：{character.name}',
