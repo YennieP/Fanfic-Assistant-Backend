@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from characters.models import BaseCard, AUMod
+from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from logs.models import LlmCallLog
 from logs.decorators import log_llm_call
 from users.encryption import decrypt_key
@@ -88,6 +88,33 @@ def _get_provider(llm_config, request_user):
         return GeminiProvider(api_key)
 
 
+def _get_active_rel_contexts(
+    character: BaseCard, active_relationship_ids: list[str]
+) -> list[tuple]:
+    """
+    与 generation/views.py 的 _get_active_rel_contexts 逻辑保持一致。
+    返回 [(Relationship, RelationshipMembership | None), ...]
+    仅查询属于 character.owner 且 id 在 active_relationship_ids 中的关系实体。
+    """
+    if not active_relationship_ids:
+        return []
+
+    relationships = Relationship.objects.filter(
+        id__in=active_relationship_ids,
+        owner=character.owner,
+    ).prefetch_related('memberships')
+
+    result = []
+    for rel in relationships:
+        try:
+            membership = rel.memberships.get(character=character)
+        except RelationshipMembership.DoesNotExist:
+            membership = None
+        result.append((rel, membership))
+
+    return result
+
+
 class EvaluateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -96,6 +123,8 @@ class EvaluateView(APIView):
         generated_text = (request.data.get('generated_text') or '').strip()
         character_id = request.data.get('character_id')
         au_mod_id = request.data.get('au_mod_id')
+        # 新增：接收生成时激活的关系实体 ID 列表，用于 judge 注入关系上下文
+        active_relationship_ids = request.data.get('active_relationship_ids') or []
 
         if not all([generation_id, generated_text, character_id]):
             return Response({'error': '缺少必填参数'}, status=400)
@@ -125,7 +154,12 @@ class EvaluateView(APIView):
         except (Exception,) as e:
             return Response({'error': str(e)}, status=400)
 
-        system_prompt, user_prompt = build_judge_prompt(character, au_mod, generated_text)
+        # 查询关系上下文（空列表时 build_judge_prompt 行为与原实现完全一致）
+        active_rel_contexts = _get_active_rel_contexts(character, active_relationship_ids)
+
+        system_prompt, user_prompt = build_judge_prompt(
+            character, au_mod, generated_text, active_rel_contexts
+        )
 
         judge_id = uuid.uuid4()
 

@@ -90,6 +90,14 @@ def _build_system(
     if character.core_fears:
         lines.append(f'核心恐惧：{"、".join(f["content"] for f in character.core_fears)}')
 
+    # ── 新增：形成性经历 ────────────────────────────────────────────────────
+    # 决定角色对特定情境的隐性反应（如有被背叛经历的角色对陌生人不应立刻全然信任）
+    if character.key_experiences:
+        lines.append('\n【形成性经历】')
+        for exp in character.key_experiences:
+            lines.append(f'  · {exp["content"]}')
+    # ── 新增结束 ────────────────────────────────────────────────────────────
+
     patterns = character.behavioral_patterns or []
     if patterns:
         lines.append('\n【行为模式】')
@@ -119,6 +127,20 @@ def _build_system(
         lines.append(f'\n日常基调：{character.default_state}')
     if character.emotion_expression_style:
         lines.append(f'情绪表达：{character.emotion_expression_style}')
+
+    # ── 新增：台词风格标签 ──────────────────────────────────────────────────
+    # 放在情绪表达之后，作为言语层面的补充约束
+    # 用标签形式而非规则描述：标签直接来自作者归纳，比规则更准确
+    speech_tags = character.speech_style_custom_tags or {}
+    scene_tags = speech_tags.get('sceneType') or speech_tags.get('scene_type') or []
+    target_tags = speech_tags.get('targetType') or speech_tags.get('target_type') or []
+    if scene_tags or target_tags:
+        lines.append('\n【台词风格标签】')
+        if scene_tags:
+            lines.append(f'  场景类型惯用风格：{"、".join(scene_tags)}')
+        if target_tags:
+            lines.append(f'  对象类型惯用风格：{"、".join(target_tags)}')
+    # ── 新增结束 ────────────────────────────────────────────────────────────
 
     if au_mod:
         lines.append(f'\n【AU设定：{au_mod.au_name}】')
