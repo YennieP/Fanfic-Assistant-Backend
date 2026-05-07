@@ -32,6 +32,9 @@ def tags_to_text(tags: dict) -> str:
     """
     将 TAXONOMY 标签选择转成描述文字，用于向量化存储。
     对应 A1 方案。
+
+    emotion.shared 现为数组（支持复合情绪），用顿号拼接后与其余标签合并。
+    兼容旧格式（字符串），data migration 完成后此兼容分支可移除。
     """
     parts = []
     if tags.get('scene_type'):
@@ -40,8 +43,15 @@ def tags_to_text(tags: dict) -> str:
         parts.append(tags['initiative'])
     if tags.get('emotion'):
         emotion = tags['emotion']
-        if emotion.get('shared'):
-            parts.append(emotion['shared'])
+        shared = emotion.get('shared')
+        if isinstance(shared, list):
+            # 新格式：数组，用顿号拼接
+            shared_str = '、'.join(s for s in shared if s)
+            if shared_str:
+                parts.append(shared_str)
+        elif isinstance(shared, str) and shared:
+            # 旧格式兼容（data migration 后理论上不再出现）
+            parts.append(shared)
         if emotion.get('intensity'):
             parts.append(emotion['intensity'])
     if tags.get('target_type'):
