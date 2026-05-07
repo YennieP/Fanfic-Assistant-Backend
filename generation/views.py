@@ -1,5 +1,6 @@
 import json
 import uuid
+import time
 import logging
 from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
@@ -30,11 +31,52 @@ def _is_rate_limited(user_id: int, rate: int = 10, period: int = 60) -> bool:
     return False
 
 
+def _log_vector_search(
+    user,
+    generation_id,
+    character_id,
+    query_text: str,
+    top_k: int,
+    results: list,
+    latency_ms: int,
+) -> None:
+    """
+    写入 VectorSearchLog，静默失败不影响主流程。
+
+    top_similarity 暂存 None（优化期补全）：
+    需要传入 query_embedding 才能精确计算，当前 ablation study
+    只需 result_count / style_injected 即可支撑分析。
+    见 ToDo.md「VectorSearchLog top_similarity 分析」。
+    """
+    try:
+        from logs.models import VectorSearchLog
+        from logs.context import request_id_var
+
+        request_id = request_id_var.get(None)
+
+        VectorSearchLog.objects.create(
+            user=user,
+            generation_id=generation_id,
+            request_id=request_id,
+            feature='style_retrieval',
+            character_id=character_id,
+            query_text=query_text,
+            top_k=top_k,
+            result_count=len(results),
+            top_similarity=None,
+            latency_ms=latency_ms,
+            style_injected=len(results) > 0,
+        )
+    except Exception:
+        logger.warning('VectorSearchLog write failed, ignoring', exc_info=True)
+
+
 def _get_style_fragments(
     character: BaseCard,
     scene_input: dict,
     user,
     llm_config,
+    generation_id,
     limit: int = 5,
 ) -> list:
     """
@@ -62,7 +104,8 @@ def _get_style_fragments(
 
         query_embedding = get_embedding(scene_text, api_key)
 
-        return list(
+        t_start = time.monotonic()
+        results = list(
             Fragment.objects.filter(
                 owner=user,
                 character=character,
@@ -72,6 +115,20 @@ def _get_style_fragments(
                 CosineDistance('embedding', query_embedding)
             )[:limit]
         )
+        latency_ms = int((time.monotonic() - t_start) * 1000)
+
+        # 记录检索日志，静默失败
+        _log_vector_search(
+            user=user,
+            generation_id=generation_id,
+            character_id=character.id,
+            query_text=scene_text,
+            top_k=limit,
+            results=results,
+            latency_ms=latency_ms,
+        )
+
+        return results
 
     except Exception:
         logger.exception('Style fragment retrieval failed, proceeding without injection')
@@ -189,9 +246,13 @@ class GenerateStreamView(APIView):
         else:
             provider = GeminiProvider(api_key)
 
+        # generation_id 在 stream 开始前生成，供 VectorSearchLog 关联使用
+        generation_id = uuid.uuid4()
+
         # ── 候选面板逻辑 ──────────────────────────────────────────────────────
         all_candidates = _get_style_fragments(
-            character, scene_input, request.user, llm_config, limit=5
+            character, scene_input, request.user, llm_config,
+            generation_id=generation_id, limit=5,
         )
 
         if forced_fragment_id:
@@ -209,8 +270,6 @@ class GenerateStreamView(APIView):
             character, au_mod, scene_input, style_fragments, active_rel_contexts,
             output_language=output_language,
         )
-
-        generation_id = uuid.uuid4()
 
         @log_llm_call(feature='character_generate', sync=True)
         def _get_stream(user=None, generation_id=None):
