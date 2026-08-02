@@ -1,0 +1,6 @@
+# 测试专用依赖（不进生产 requirements.txt）。
+# CI: pip install -r requirements.txt -r requirements-dev.txt
+pytest==8.3.4
+pytest-django==4.9.0
+factory-boy==3.3.1
+pytest-cov==6.0.0

@@ -1,7 +1,14 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 db.sqlite3
 .env
 *.log
+
+# 测试 / 覆盖率产物
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/

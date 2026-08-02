@@ -10,12 +10,8 @@ from django.core.cache import cache
 from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from users.encryption import decrypt_key
 from .prompt import build_prompt
-from .providers.anthropic import AnthropicProvider
-from .providers.gemini import GeminiProvider
+from .providers import get_provider
 from logs.decorators import log_llm_call
-from .providers.groq import GroqProvider
-from .providers.cerebras import CerebrasProvider
-from .providers.openrouter import OpenRouterProvider
 from users.models import UserProviderKey
 
 
@@ -235,16 +231,9 @@ class GenerateStreamView(APIView):
                 content_type='text/event-stream',
             )
 
-        if llm_config.provider == 'anthropic':
-            provider = AnthropicProvider(api_key)
-        elif llm_config.provider == 'groq':
-            provider = GroqProvider(api_key)
-        elif llm_config.provider == 'cerebras':
-            provider = CerebrasProvider(api_key)
-        elif llm_config.provider == 'openrouter':
-            provider = OpenRouterProvider(api_key)
-        else:
-            provider = GeminiProvider(api_key)
+        # provider 的唯一构造点（测试通过 monkeypatch get_provider 注入 FakeProvider）。
+        # 行为与原 if/elif 一致：未知 provider 名回退 Gemini。
+        provider = get_provider(llm_config.provider, api_key)
 
         # generation_id 在 stream 开始前生成，供 VectorSearchLog 关联使用
         generation_id = uuid.uuid4()
