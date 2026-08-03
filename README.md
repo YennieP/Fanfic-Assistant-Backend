@@ -38,7 +38,7 @@ Key finding: "switch mechanism" scene (character fully lets loose in entertainme
 | Auth | JWT (djangorestframework-simplejwt) |
 | Database | SQLite (dev) / PostgreSQL (prod, Railway) |
 | Vector DB | pgvector (PostgreSQL extension) |
-| LLM | Anthropic SDK / Google Gen AI SDK / Groq SDK |
+| LLM | Anthropic SDK / Google Gen AI SDK / Groq SDK / Cerebras (OpenAI-compatible SDK) / OpenRouter (OpenAI-compatible SDK) |
 | Encryption | cryptography (Fernet symmetric) |
 | Async Logging | QueueHandler + QueueListener |
 | Naming | djangorestframework-camel-case |
@@ -68,8 +68,10 @@ fanfic-assistant-backend/
     providers/
       base.py         # BaseProvider, UsageInfo, CompleteResult
       anthropic.py    # claude-sonnet-4-20250514
-      gemini.py       # gemini-2.5-flash (buffered + retry)
+      gemini.py       # gemini-2.5-flash (real streaming via generate_content_stream + first-chunk retry)
       groq.py         # llama-3.3-70b-versatile (free tier)
+      cerebras.py     # llama3.1-8b, OpenAI-compatible (~1B tokens/month free)
+      openrouter.py   # meta-llama/llama-3.3-70b-instruct:free (200 req/day free)
     prompt.py         # Character card + style fragments → system/user prompt
     views.py          # POST /api/generate/stream/ SSE endpoint
   examples/           # Phase 2
@@ -104,7 +106,7 @@ fanfic-assistant-backend/
 ```json
 { "provider": "groq", "api_key": "gsk_..." }
 ```
-Supported providers: `anthropic`, `gemini`, `groq`. Keys are Fernet-encrypted, never returned in plaintext. Saving a key automatically switches to that provider.
+Supported providers: `anthropic`, `gemini`, `groq`, `cerebras`, `openrouter`. Keys are Fernet-encrypted, never returned in plaintext. Saving a key automatically switches to that provider.
 
 **LLM Config — PATCH body (switch without re-entering key):**
 ```json
@@ -116,9 +118,11 @@ Supported providers: `anthropic`, `gemini`, `groq`. Keys are Fernet-encrypted, n
 {
   "activeProvider": "groq",
   "providers": {
-    "anthropic": { "hasKey": true },
-    "gemini": { "hasKey": true },
-    "groq": { "hasKey": true }
+    "anthropic": { "hasKey": true, "capabilities": { "video": false, "embedding": false } },
+    "gemini": { "hasKey": true, "capabilities": { "video": true, "embedding": true } },
+    "groq": { "hasKey": true, "capabilities": { "video": false, "embedding": false } },
+    "cerebras": { "hasKey": false, "capabilities": { "video": false, "embedding": false } },
+    "openrouter": { "hasKey": false, "capabilities": { "video": false, "embedding": false } }
   }
 }
 ```
@@ -180,8 +184,9 @@ Supported providers: `anthropic`, `gemini`, `groq`. Keys are Fernet-encrypted, n
 ```
 data: {"type": "chunk", "content": "..."}
 data: {"type": "done", "generationId": "uuid", "styleInjected": true, "styleFragmentCount": 3}
-data: {"type": "error", "message": "..."}
+data: {"type": "error", "code": "provider_key_invalid"}
 ```
+Error `code` is machine-readable (`provider_key_invalid`, `provider_rate_limit`, `provider_quota_daily`, `provider_quota_monthly`, `rate_limited`, `no_api_key`, `character_not_found`, `validation_error`, `generation_failed`, ...); the frontend maps it to a localized message.
 
 Rate limit: 10 req/user/min. Style injection (Phase 2) fires automatically when confirmed fragments exist for the character and the user has a Gemini Key.
 
@@ -332,15 +337,18 @@ class LabelHistory(models.Model):
 | TAXONOMY | ✅ | `core/taxonomy.py` + `GET /api/taxonomy/` |
 | LLM-as-judge evaluation | ✅ | `evaluation/` app; 0–10 score; `generation_id` chain |
 | Phase 1 experiment | ✅ | 9.8 vs 8.4 vs 7.8; see EXPERIMENT.md |
-| Multi-provider key storage | ✅ | `UserProviderKey`; Anthropic/Gemini/Groq |
+| Multi-provider key storage | ✅ | `UserProviderKey`; Anthropic/Gemini/Groq/Cerebras/OpenRouter |
 | Groq provider | ✅ | llama-3.3-70b-versatile; free tier |
+| Cerebras provider | ✅ | `llama3.1-8b`, OpenAI-compatible SDK; ~1B tokens/month free (originally planned `llama-3.3-70b`, not available on free tier — see `6a0c7bb`) |
+| OpenRouter provider | ✅ | `meta-llama/llama-3.3-70b-instruct:free`, OpenAI-compatible SDK; 200 req/day free |
 | Article + Fragment models | ✅ | pgvector VectorField(768 dims) |
 | LLM segmentation | ✅ | Line-number approach; chunked; ~200 output tokens |
 | TAXONOMY tag inference | ✅ | LLM infers; all editable |
 | pgvector embedding | ✅ | gemini-embedding-001; MRL to 768 dims |
 | Example Library API | ✅ | Full CRUD + segment + infer-tags + confirm |
 | Style injection in generation | ✅ | Cosine similarity; few-shot system prompt injection |
-| Phase 2 ablation study | ❌ | Core deliverable; pending UI polish |
+| VectorSearchLog | ✅ | Query text, result count, latency; feeds the ablation study |
+| Phase 2 ablation study | ❌ | Core deliverable; see frontend `docs/ToDo.md` for current blockers |
 | Celery + Redis | ⚠️ Deferred | Re-evaluate as needed |
 
 ---
@@ -409,7 +417,7 @@ Naming: backend `snake_case` → API `camelCase` (djangorestframework-camel-case
 | 认证 | JWT（djangorestframework-simplejwt）|
 | 数据库 | SQLite（开发）/ PostgreSQL（生产，Railway）|
 | 向量数据库 | pgvector（PostgreSQL 扩展）|
-| LLM | Anthropic SDK / Google Gen AI SDK / Groq SDK |
+| LLM | Anthropic SDK / Google Gen AI SDK / Groq SDK / Cerebras (OpenAI-compatible SDK) / OpenRouter (OpenAI-compatible SDK) |
 | 加密 | cryptography（Fernet 对称加密）|
 | 异步日志 | QueueHandler + QueueListener |
 | 命名转换 | djangorestframework-camel-case |
@@ -435,16 +443,18 @@ Naming: backend `snake_case` → API `camelCase` (djangorestframework-camel-case
 ```json
 { "provider": "groq", "api_key": "gsk_..." }
 ```
-支持的 provider：`anthropic`、`gemini`、`groq`。Key Fernet 加密存储，永不明文返回。保存 Key 后自动切换到该 provider。
+支持的 provider：`anthropic`、`gemini`、`groq`、`cerebras`、`openrouter`。Key Fernet 加密存储，永不明文返回。保存 Key 后自动切换到该 provider。
 
 **GET 响应：**
 ```json
 {
   "activeProvider": "groq",
   "providers": {
-    "anthropic": { "hasKey": true },
-    "gemini": { "hasKey": true },
-    "groq": { "hasKey": true }
+    "anthropic": { "hasKey": true, "capabilities": { "video": false, "embedding": false } },
+    "gemini": { "hasKey": true, "capabilities": { "video": true, "embedding": true } },
+    "groq": { "hasKey": true, "capabilities": { "video": false, "embedding": false } },
+    "cerebras": { "hasKey": false, "capabilities": { "video": false, "embedding": false } },
+    "openrouter": { "hasKey": false, "capabilities": { "video": false, "embedding": false } }
   }
 }
 ```
@@ -485,8 +495,9 @@ SSE 事件格式：
 ```
 data: {"type": "chunk", "content": "..."}
 data: {"type": "done", "generationId": "uuid", "styleInjected": true, "styleFragmentCount": 3}
-data: {"type": "error", "message": "..."}
+data: {"type": "error", "code": "provider_key_invalid"}
 ```
+`code` 为机器可读错误码（`provider_key_invalid`、`provider_rate_limit`、`provider_quota_daily`、`provider_quota_monthly`、`rate_limited`、`no_api_key`、`character_not_found`、`validation_error`、`generation_failed` 等），前端据此查 i18n 表展示本地化文案。
 
 限流：每用户每分钟 10 次。Phase 2 风格注入在有已入库片段且有 Gemini Key 时自动触发。
 
@@ -535,15 +546,18 @@ data: {"type": "error", "message": "..."}
 | TAXONOMY 全局标签表 | ✅ | `core/taxonomy.py` + `GET /api/taxonomy/` |
 | LLM-as-judge 一致性评估 | ✅ | `evaluation/` app；0-10 分；`generation_id` 串联链路 |
 | Phase 1 对比实验 | ✅ | 9.8 vs 8.4 vs 7.8；见 EXPERIMENT.md |
-| 多 provider Key 存储 | ✅ | `UserProviderKey`；Anthropic/Gemini/Groq 独立 Key |
+| 多 provider Key 存储 | ✅ | `UserProviderKey`；Anthropic/Gemini/Groq/Cerebras/OpenRouter 独立 Key |
 | Groq provider | ✅ | llama-3.3-70b-versatile；免费 tier |
+| Cerebras provider | ✅ | `llama3.1-8b`，OpenAI 兼容 SDK；~10 亿 token/月免费（原计划用 `llama-3.3-70b`，免费 tier 账号权限不支持，见 `6a0c7bb`）|
+| OpenRouter provider | ✅ | `meta-llama/llama-3.3-70b-instruct:free`，OpenAI 兼容 SDK；200 req/天免费 |
 | Article + Fragment 模型 | ✅ | pgvector VectorField(768 维) |
 | LLM 情节切割 | ✅ | 行号边界方案；分块处理；~200 token 输出 |
 | TAXONOMY 标签推断 | ✅ | LLM 推断；全部可编辑 |
 | pgvector 向量化 | ✅ | gemini-embedding-001；MRL 截断至 768 维 |
 | 示例库 API | ✅ | 完整 CRUD + segment + infer-tags + confirm |
 | 生成时风格注入 | ✅ | cosine similarity 检索；few-shot 注入 |
-| Phase 2 ablation study | ❌ | 核心 deliverable；待 UI 优化完成后执行 |
+| VectorSearchLog | ✅ | 查询文字、结果数、延迟；供 ablation study 分析使用 |
+| Phase 2 ablation study | ❌ | 核心 deliverable；当前阻塞项见前端仓库 `docs/ToDo.md` |
 | Celery + Redis | ⚠️ 延期 | 按需评估 |
 
 ---
