@@ -355,26 +355,35 @@ class LabelHistory(models.Model):
 
 ## Local Development
 
+The project uses a repository-local uv, Python 3.12, virtual environment, cache,
+temporary directory, and configuration. It does not install or replace a
+system Python and does not modify `PATH` or shell profiles.
+
+**Apple Silicon macOS:**
+
 ```bash
 git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
 cd fanfic-assistant-backend
-python -m venv venv
-venv\Scripts\activate        # Windows
-source venv/bin/activate     # macOS/Linux
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver   # http://localhost:8000
+./scripts/bootstrap-macos.sh
+./scripts/python-project.sh manage.py migrate
+./scripts/python-project.sh manage.py runserver 127.0.0.1:8000
 ```
 
-**.env:**
+**64-bit x86 Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
+cd Fanfic-Assistant-Backend
+.\scripts\bootstrap-windows.ps1
+.\scripts\python-project.ps1 manage.py migrate
+.\scripts\python-project.ps1 manage.py runserver 127.0.0.1:8000
 ```
-SECRET_KEY=django-insecure-xxx
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-DATABASE_URL=sqlite:///db.sqlite3
-CORS_ALLOWED_ORIGINS=http://localhost:5173
-ENCRYPTION_KEY=<Fernet.generate_key()>
-```
+
+Both bootstrap scripts verify a pinned uv download, install dependencies from
+`uv.lock`, and create a local `.env` with fresh development-only secrets when
+one does not already exist. The local database is SQLite. Do not copy Railway
+production environment variables into this checkout. Delete `.runtime/` and
+`.venv/` to remove the project Python and all Python dependencies completely.
 
 Naming: backend `snake_case` → API `camelCase` (djangorestframework-camel-case auto-converts).
 
@@ -564,26 +573,33 @@ data: {"type": "error", "code": "provider_key_invalid"}
 
 ## 本地开发
 
+本项目将 uv、Python 3.12、虚拟环境、缓存、临时目录和工具配置全部放在仓库内，
+不会安装或替换系统 Python，也不会修改 `PATH` 或 shell 配置。
+
+**Apple Silicon macOS：**
+
 ```bash
 git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
 cd fanfic-assistant-backend
-python -m venv venv
-venv\Scripts\activate        # Windows
-source venv/bin/activate     # macOS/Linux
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver   # http://localhost:8000
+./scripts/bootstrap-macos.sh
+./scripts/python-project.sh manage.py migrate
+./scripts/python-project.sh manage.py runserver 127.0.0.1:8000
 ```
 
-**.env：**
+**64 位 x86 Windows（PowerShell）：**
+
+```powershell
+git clone https://github.com/YennieP/Fanfic-Assistant-Backend.git
+cd Fanfic-Assistant-Backend
+.\scripts\bootstrap-windows.ps1
+.\scripts\python-project.ps1 manage.py migrate
+.\scripts\python-project.ps1 manage.py runserver 127.0.0.1:8000
 ```
-SECRET_KEY=django-insecure-xxx
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-DATABASE_URL=sqlite:///db.sqlite3
-CORS_ALLOWED_ORIGINS=http://localhost:5173
-ENCRYPTION_KEY=<用 Fernet.generate_key() 生成>
-```
+
+两个 bootstrap 脚本都会校验固定版本 uv 的下载文件、严格按 `uv.lock` 安装依赖；
+若 `.env` 不存在，还会生成仅供本地开发使用的新密钥。本地数据库默认使用 SQLite。
+不要把 Railway 生产环境变量复制到本仓库。删除 `.runtime/` 和 `.venv/` 即可完整移除
+项目 Python 及全部 Python 依赖。
 
 命名约定：后端存储 `snake_case`，API 输出自动转换为 `camelCase`（djangorestframework-camel-case）。
 
