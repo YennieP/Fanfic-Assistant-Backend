@@ -70,10 +70,11 @@ Windows：
 
 ## API 总览
 
-除注册和 JWT 获取/刷新外，API 默认要求 Bearer token。JSON 通过 camel-case parser/renderer 与前端交互。
+除健康检查、注册和 JWT 获取/刷新外，API 默认要求 Bearer token。JSON 通过 camel-case parser/renderer 与前端交互。
 
 | 领域 | 路径 | 说明 |
 |---|---|---|
+| Health | `/health/`, `/health/live/` | 数据库就绪检查与不访问外部依赖的进程存活检查；无需鉴权 |
 | Auth | `/api/auth/register/`, `/api/auth/me/` | 注册与当前用户 |
 | JWT | `/api/token/`, `/api/token/refresh/` | 获取与刷新 token |
 | LLM config | `/api/auth/llm-config/` | 多 provider Key 与当前 provider；不返回明文 Key |
@@ -99,6 +100,7 @@ Windows：
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除；外部 LLM 调用不在该事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
+- `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表。
 
 ## 部署
 

@@ -10,6 +10,7 @@ logger.setLevel(logging.INFO)
 logger.propagate = False  # 不往 Django 默认 logger 传，避免重复记录
 
 EXCLUDE_PREFIXES = [
+    '/health/',
     '/admin/',
     '/api/token/',
     '/static/',

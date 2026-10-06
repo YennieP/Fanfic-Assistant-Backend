@@ -1,10 +1,13 @@
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from .health import liveness, readiness
 
 handler500 = 'core.handler500.server_error'
 
 urlpatterns = [
+    path('health/', readiness, name='health-readiness'),
+    path('health/live/', liveness, name='health-liveness'),
     path('admin/', admin.site.urls),
     path('api/auth/', include('users.urls')),
     path('api/', include('characters.urls')),
