@@ -21,6 +21,18 @@ class FragmentSerializer(serializers.ModelSerializer):
         # 允许创建父片段（character=null）时由前端控制
 
 
+class ResolveConflictSerializer(serializers.Serializer):
+    old_fragment_id = serializers.UUIDField()
+    new_fragment_id = serializers.UUIDField()
+    action = serializers.ChoiceField(choices=['keepOld', 'keepNew'])
+    edited_new_text = serializers.CharField(allow_blank=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs['old_fragment_id'] == attrs['new_fragment_id']:
+            raise serializers.ValidationError('新旧片段不能是同一个片段')
+        return attrs
+
+
 class ArticleListSerializer(serializers.ModelSerializer):
     character_name = serializers.CharField(source='character.name', read_only=True)
     fragment_count = serializers.SerializerMethodField()

@@ -1,5 +1,7 @@
 import logging
+from django.db import transaction
 from django.db.models import Max, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -8,7 +10,12 @@ from rest_framework import permissions
 from characters.models import BaseCard
 from users.encryption import decrypt_key
 from .models import Article, Fragment
-from .serializers import ArticleSerializer, ArticleListSerializer, FragmentSerializer
+from .serializers import (
+    ArticleSerializer,
+    ArticleListSerializer,
+    FragmentSerializer,
+    ResolveConflictSerializer,
+)
 from .embedding import get_embedding, tags_to_text
 from .llm_pipeline import segment_article, infer_tags
 from generation.providers.anthropic import AnthropicProvider
@@ -18,6 +25,32 @@ from generation.providers.cerebras import CerebrasProvider
 from generation.providers.openrouter import OpenRouterProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_residuals(preserved: str, discarded: str) -> list[str]:
+    """复刻前端既有语义：保留 discarded 中不与 preserved 重叠的连续行块。"""
+    preserved_lines = {
+        line.strip()
+        for line in preserved.split('\n')
+        if line.strip()
+    }
+    blocks: list[str] = []
+    current: list[str] = []
+
+    for raw_line in discarded.split('\n'):
+        line = raw_line.strip()
+        if line and line in preserved_lines:
+            text = '\n'.join(item for item in current if item).strip()
+            if text:
+                blocks.append(text)
+            current = []
+        else:
+            current.append(line)
+
+    tail = '\n'.join(item for item in current if item).strip()
+    if tail:
+        blocks.append(tail)
+    return blocks
 
 
 def _get_provider(llm_config):
@@ -360,6 +393,95 @@ class FragmentListView(APIView):
             fragment_type='story',
         )
         return Response(FragmentSerializer(fragment).data, status=201)
+
+
+class FragmentResolveConflictView(APIView):
+    """一次事务完成冲突片段替换、残余片段创建和舍弃片段删除。"""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = ResolveConflictSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        old_id = data['old_fragment_id']
+        new_id = data['new_fragment_id']
+        action = data['action']
+        edited_new_text = data['edited_new_text']
+
+        with transaction.atomic():
+            fragments = list(
+                Fragment.objects.select_for_update()
+                .select_related('article')
+                .filter(
+                    owner=request.user,
+                    article__owner=request.user,
+                    id__in=[old_id, new_id],
+                )
+                .order_by('id')
+            )
+            if len(fragments) != 2:
+                # 对不存在、已被处理或属于其他用户的片段统一返回 404，
+                # 同时保证重复请求不会再次创建 residual。
+                raise Http404
+
+            fragments_by_id = {fragment.id: fragment for fragment in fragments}
+            old_fragment = fragments_by_id[old_id]
+            new_fragment = fragments_by_id[new_id]
+
+            if not old_fragment.article_id or old_fragment.article_id != new_fragment.article_id:
+                return Response({'error': '新旧片段必须属于同一篇文章'}, status=400)
+            if not old_fragment.is_confirmed or new_fragment.is_confirmed:
+                return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+
+            if action == 'keepOld':
+                preserved_fragment = old_fragment
+                discarded_fragment = new_fragment
+                preserved_text = old_fragment.text
+                discarded_text = edited_new_text
+            else:
+                preserved_fragment = new_fragment
+                discarded_fragment = old_fragment
+                preserved_text = edited_new_text
+                discarded_text = old_fragment.text
+
+                if edited_new_text != new_fragment.text:
+                    new_fragment.text = edited_new_text
+                    new_fragment.is_confirmed = False
+                    new_fragment.embedding = None
+                    new_fragment.save(update_fields=[
+                        'text', 'is_confirmed', 'embedding', 'updated_at',
+                    ])
+
+            residual_texts = _extract_residuals(preserved_text, discarded_text)
+            max_order = (
+                Fragment.objects.filter(article_id=old_fragment.article_id)
+                .aggregate(max_order=Max('order'))['max_order']
+            )
+            next_order = max(max_order if max_order is not None else 0, 0) + 1
+            residual_fragments = [
+                Fragment(
+                    owner=request.user,
+                    article_id=old_fragment.article_id,
+                    character_id=old_fragment.article.character_id,
+                    text=text,
+                    order=next_order + index,
+                    fragment_type='story',
+                )
+                for index, text in enumerate(residual_texts)
+            ]
+            Fragment.objects.bulk_create(residual_fragments)
+
+            deleted_fragment_id = discarded_fragment.id
+            discarded_fragment.delete()
+
+        return Response({
+            'preserved_fragment': FragmentSerializer(preserved_fragment).data,
+            'residual_fragments': FragmentSerializer(residual_fragments, many=True).data,
+            'deleted_fragment_id': str(deleted_fragment_id),
+            'residual_count': len(residual_fragments),
+        })
 
 
 class FragmentDetailView(APIView):
