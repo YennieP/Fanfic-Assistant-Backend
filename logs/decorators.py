@@ -30,6 +30,7 @@ def log_llm_call(feature: str, sync: bool = False):
     被装饰函数可接收 keyword argument：
       user:          Django User 对象或 None
       generation_id: UUID，写入 LlmCallLog.generation_id，用于关联评估记录
+      request_id:    显式请求 ID；用于 ContextVar 已在流迭代前 reset 的 SSE 路径
     """
     def decorator(func):
         @wraps(func)
@@ -38,7 +39,7 @@ def log_llm_call(feature: str, sync: bool = False):
             user = kwargs.get('user', None)
             generation_id = kwargs.get('generation_id', None)
             user_id = user.id if user else None
-            req_id = request_id_var.get() or None
+            req_id = kwargs.get('request_id') or request_id_var.get() or None
 
             try:
                 result = func(*args, **kwargs)
@@ -106,6 +107,17 @@ def _wrap_generator(gen, feature, start, user_id, req_id, sync, generation_id):
                 usage_info = item
             else:
                 yield item
+    except GeneratorExit:
+        latency = int((time.monotonic() - start) * 1000)
+        _log(
+            sync=sync, generation_id=generation_id,
+            feature=feature, model_name='',
+            prompt_tokens=0, completion_tokens=0,
+            latency_ms=latency, status='error',
+            error_message='stream interrupted before completion',
+            request_id=req_id, user_id=user_id,
+        )
+        raise
     except Exception as e:
         latency = int((time.monotonic() - start) * 1000)
         _log(

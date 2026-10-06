@@ -30,13 +30,17 @@ class RequestLoggingMiddleware:
 
         # 生成 request_id，写入 ContextVar（service 层可读取）
         req_id = uuid.uuid4()
+        # StreamingHttpResponse 会在中间件返回后才迭代；把 ID 同时挂到 request
+        # 上，view 可显式捕获并传给延迟执行的生成器。
+        request.request_id = str(req_id)
         token = request_id_var.set(str(req_id))
 
         start = time.monotonic()
         response = self.get_response(request)
         latency = int((time.monotonic() - start) * 1000)
 
-        # 写完 response 后再记录，能拿到 status_code 和真实 latency
+        # 对普通响应是 view 处理耗时；对 StreamingHttpResponse 是流准备耗时，
+        # 不包含首包等待或完整流迭代时间。
         try:
             user_id = request.user.id if request.user.is_authenticated else None
             record = logging.LogRecord(
