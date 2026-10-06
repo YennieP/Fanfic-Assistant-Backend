@@ -104,7 +104,7 @@ Windows：
 
 Railway 当前使用 Railpack。仓库同时保留 `requirements.txt` 和 uv 文件时，Railpack 优先执行 `pip install -r requirements.txt`；`.python-version` 将生产 Python 固定为 3.12。`requirements.txt` 必须始终包含 Gunicorn，不能依赖 uv 的可选依赖组。
 
-当前 Railway 服务配置有独立的 Custom Start Command，会覆盖 [Procfile](./Procfile)。两者尚未统一前，应以 Railway 部署详情显示的命令为生产事实；计划中的 gthread worker 参数只有在移除或同步平台覆盖后才会生效。
+Railway 服务级 Custom Start Command 已移除，生产当前读取 [Procfile](./Procfile)。deployment `16878416-6ea5-4407-a4ce-e03fd46d7eb1` 的启动日志确认 Gunicorn 使用 `gthread`，并启动 2 个 worker；仓库参数为每个 worker 4 个线程、timeout 180 秒。平台配置仍可能覆盖仓库文件，因此后续部署验收必须继续以实际 deployment 命令和启动日志为准。
 
 任何部署相关改动都必须独立审核以下内容：
 
