@@ -13,6 +13,7 @@ from .prompt import build_prompt
 from .providers import get_provider
 from .providers.base import ProviderError
 from logs.decorators import log_llm_call
+from logs.context import request_id_var
 from users.models import UserProviderKey
 
 
@@ -261,13 +262,24 @@ class GenerateStreamView(APIView):
             output_language=output_language,
         )
 
+        # 中间件会在 StreamingHttpResponse 返回后 reset ContextVar，而真正的
+        # provider 调用发生在后续迭代阶段，所以必须在这里显式捕获。
+        stream_request_id = (
+            getattr(request, 'request_id', None)
+            or request_id_var.get(None)
+        )
+
         @log_llm_call(feature='character_generate', sync=True)
-        def _get_stream(user=None, generation_id=None):
+        def _get_stream(user=None, generation_id=None, request_id=None):
             return provider.stream(system_prompt, user_prompt)
 
         def event_stream():
             try:
-                for chunk in _get_stream(user=request.user, generation_id=generation_id):
+                for chunk in _get_stream(
+                    user=request.user,
+                    generation_id=generation_id,
+                    request_id=stream_request_id,
+                ):
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
 
