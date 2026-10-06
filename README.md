@@ -64,6 +64,8 @@ Windows：
 2. `manage.py check`
 3. 全部 pytest 测试与 coverage 报告
 
+脚本只在子进程中为缺失的 `SECRET_KEY` / `ENCRYPTION_KEY` 提供固定的非生产验证值，使干净 CI 无需保存 secrets；已有环境变量不会被覆盖。
+
 `makemigrations --check` 暂未进入阻塞门禁，因为 `VectorSearchLog` 有三个已知索引名漂移；修复方式和生产数据库核验边界记录在跨系统 `ToDo.md`。
 
 ## API 总览

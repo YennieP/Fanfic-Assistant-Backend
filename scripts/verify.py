@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 import sys
@@ -7,11 +8,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+VERIFY_ENV = os.environ.copy()
+VERIFY_ENV.setdefault("SECRET_KEY", "verification-only-secret-key")
+VERIFY_ENV.setdefault("ENCRYPTION_KEY", base64.urlsafe_b64encode(b"0" * 32).decode())
 
 
 def run(*arguments: str) -> None:
     print(f"+ {' '.join(arguments)}", flush=True)
-    subprocess.run(arguments, cwd=ROOT, check=True, env=os.environ.copy())
+    subprocess.run(arguments, cwd=ROOT, check=True, env=VERIFY_ENV)
 
 
 def main() -> int:

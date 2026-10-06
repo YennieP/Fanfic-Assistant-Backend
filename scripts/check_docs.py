@@ -15,7 +15,15 @@ REQUIRED = (
     "EXPERIMENT.md",
     "docs/README.md",
 )
-IGNORED_DIRS = {".git", ".runtime", ".venv", "htmlcov", "staticfiles"}
+IGNORED_DIRS = {
+    ".git",
+    ".pytest_cache",
+    ".runtime",
+    ".venv",
+    "htmlcov",
+    "staticfiles",
+    "venv",
+}
 LINK_PATTERN = re.compile(r"!?\[[^]]*]\(([^)]+)\)")
 
 
