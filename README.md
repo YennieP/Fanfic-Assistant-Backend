@@ -86,6 +86,7 @@ Windows：
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment、confirm-all |
 | Fragments | `/api/examples/fragments/` | 片段列表/创建、详情、infer-tags、confirm |
+| Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/` | 在一个事务中处理重叠片段 |
 
 路由细节以各 app 的 `urls.py` 与 serializer 为准。新增或修改 endpoint 时，应同步本表和跨系统实现稿。
@@ -95,6 +96,7 @@ Windows：
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除；外部 LLM 调用不在该事务中。
+- `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
 - Railway 启动命令来自 [Procfile](./Procfile)：先执行 migration 和 collectstatic，再启动 Gunicorn gthread worker。
 

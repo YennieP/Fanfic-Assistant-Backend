@@ -33,6 +33,21 @@ class ResolveConflictSerializer(serializers.Serializer):
         return attrs
 
 
+class MergeFragmentsSerializer(serializers.Serializer):
+    keep_fragment_id = serializers.UUIDField()
+    delete_fragment_id = serializers.UUIDField()
+    keep_updated_at = serializers.DateTimeField()
+    delete_updated_at = serializers.DateTimeField()
+    merged_text = serializers.CharField(allow_blank=False, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs['keep_fragment_id'] == attrs['delete_fragment_id']:
+            raise serializers.ValidationError('待合并片段不能是同一个片段')
+        if not attrs['merged_text'].strip():
+            raise serializers.ValidationError({'merged_text': '合并后的内容不能为空'})
+        return attrs
+
+
 class ArticleListSerializer(serializers.ModelSerializer):
     character_name = serializers.CharField(source='character.name', read_only=True)
     fragment_count = serializers.SerializerMethodField()
