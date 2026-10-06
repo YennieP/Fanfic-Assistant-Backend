@@ -19,8 +19,8 @@ These rules apply to the whole backend repository.
 ## Verification
 
 - Run `python scripts/verify.py` with the repository's Python 3.12 environment before handoff. On the isolated Mac setup, use `.venv/bin/python scripts/verify.py`; on Windows use `.venv\\Scripts\\python.exe scripts\\verify.py`.
-- The command runs documentation checks, Django system checks, and the full pytest suite with coverage—the same checks used by GitHub Actions.
-- `makemigrations --check` is not part of the blocking gate until the known `VectorSearchLog` index-name drift is resolved. Do not generate or apply an unreviewed production migration to silence it.
+- The command runs documentation checks, Django system checks, migration-state checks, and the full pytest suite with coverage—the same checks used by GitHub Actions.
+- Do not generate or apply an unreviewed production migration merely to silence model-state drift. Inspect every generated migration and keep schema-changing migrations separate from model-state-only fixes.
 - If CI is unavailable, run the unified command on the exact commit being reviewed, record the SHA, and require a clean worktree. Any later commit invalidates that result.
 
 ## Environment and production safety

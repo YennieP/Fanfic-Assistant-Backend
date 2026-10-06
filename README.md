@@ -66,7 +66,7 @@ Windows：
 
 脚本只在子进程中为缺失的 `SECRET_KEY` / `ENCRYPTION_KEY` 提供固定的非生产验证值，使干净 CI 无需保存 secrets；已有环境变量不会被覆盖。
 
-`makemigrations --check` 暂未进入阻塞门禁，因为 `VectorSearchLog` 有三个已知索引名漂移；修复方式和生产数据库核验边界记录在跨系统 `ToDo.md`。
+统一门禁同时运行 `manage.py check`、`makemigrations --check --dry-run` 和完整 pytest；模型与 migration 状态不一致会直接失败。任何真实 schema 变更仍须单独审查 migration，并遵守跨系统 `ToDo.md` 中的生产数据库核验边界。
 
 ## API 总览
 

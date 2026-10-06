@@ -101,9 +101,12 @@ class VectorSearchLog(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['created_at']),
-            models.Index(fields=['generation_id']),
-            models.Index(fields=['feature', 'character_id']),
+            models.Index(fields=['created_at'], name='logs_vector_created_idx'),
+            models.Index(fields=['generation_id'], name='logs_vector_gen_id_idx'),
+            models.Index(
+                fields=['feature', 'character_id'],
+                name='logs_vector_feat_char_idx',
+            ),
         ]
 
     def __str__(self):

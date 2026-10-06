@@ -28,6 +28,7 @@ def main() -> int:
 
     run(*docs_command)
     run(sys.executable, "manage.py", "check")
+    run(sys.executable, "manage.py", "makemigrations", "--check", "--dry-run")
     run(sys.executable, "-m", "pytest", "--cov", "--cov-report=term-missing")
     return 0
 
