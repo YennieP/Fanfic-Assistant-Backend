@@ -27,6 +27,7 @@ def main() -> int:
         docs_command.extend(("--base", sys.argv[index + 1]))
 
     run(*docs_command)
+    run(sys.executable, "scripts/check_environment.py")
     run(sys.executable, "manage.py", "check")
     run(sys.executable, "manage.py", "makemigrations", "--check", "--dry-run")
     run(sys.executable, "-m", "pytest", "--cov", "--cov-report=term-missing")
