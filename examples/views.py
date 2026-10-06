@@ -14,6 +14,7 @@ from .serializers import (
     ArticleSerializer,
     ArticleListSerializer,
     FragmentSerializer,
+    MergeFragmentsSerializer,
     ResolveConflictSerializer,
 )
 from .embedding import get_embedding, tags_to_text
@@ -481,6 +482,65 @@ class FragmentResolveConflictView(APIView):
             'residual_fragments': FragmentSerializer(residual_fragments, many=True).data,
             'deleted_fragment_id': str(deleted_fragment_id),
             'residual_count': len(residual_fragments),
+        })
+
+
+class FragmentMergeView(APIView):
+    """一次事务完成目标片段更新与另一个片段删除。"""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = MergeFragmentsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        keep_id = data['keep_fragment_id']
+        delete_id = data['delete_fragment_id']
+
+        with transaction.atomic():
+            fragments = list(
+                Fragment.objects.select_for_update()
+                .filter(
+                    owner=request.user,
+                    article__owner=request.user,
+                    id__in=[keep_id, delete_id],
+                )
+                .order_by('id')
+            )
+            if len(fragments) != 2:
+                # 不存在、越权或重复请求均不暴露片段信息，也不会产生第二次写入。
+                raise Http404
+
+            fragments_by_id = {fragment.id: fragment for fragment in fragments}
+            keep_fragment = fragments_by_id[keep_id]
+            delete_fragment = fragments_by_id[delete_id]
+
+            if (
+                not keep_fragment.article_id
+                or keep_fragment.article_id != delete_fragment.article_id
+            ):
+                return Response({'error': '待合并片段必须属于同一篇文章'}, status=400)
+
+            if (
+                keep_fragment.updated_at != data['keep_updated_at']
+                or delete_fragment.updated_at != data['delete_updated_at']
+            ):
+                return Response({'error': '片段状态已变化，请刷新后重试'}, status=409)
+
+            keep_fragment.text = data['merged_text']
+            keep_fragment.is_confirmed = False
+            keep_fragment.embedding = None
+            keep_fragment.save(update_fields=[
+                'text', 'is_confirmed', 'embedding', 'updated_at',
+            ])
+
+            deleted_fragment_id = delete_fragment.id
+            delete_fragment.delete()
+
+        return Response({
+            'merged_fragment': FragmentSerializer(keep_fragment).data,
+            'deleted_fragment_id': str(deleted_fragment_id),
         })
 
 
