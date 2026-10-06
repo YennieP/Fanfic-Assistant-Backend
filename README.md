@@ -24,49 +24,49 @@ Django REST API for [Fanfic Assistant](https://github.com/YennieP/Fanfic-Assista
 
 ## 本地开发
 
-使用仓库专属的 Python 3.12 虚拟环境，不要修改系统 Python、全局 PATH 或其他项目环境。默认分支当前仍以 `requirements.txt` / `requirements-dev.txt` 为安装契约；隔离 uv 环境方案在单独分支审核完成前不作为生产构建依据。
+仓库自带隔离的 uv `0.12.23` 和 Python 3.12 启动脚本。uv、Python、虚拟环境、缓存和临时文件都只写入本仓库的 `.runtime/` / `.venv/`，不会修改系统 Python、全局 `PATH`、shell profile 或其他仓库。删除这两个目录即可完整回滚本地运行环境。
 
-macOS / Linux 示例：
+Apple Silicon macOS：
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python manage.py migrate
-.venv/bin/python manage.py runserver
+./scripts/bootstrap-macos.sh
+./scripts/python-project.sh manage.py migrate
+./scripts/python-project.sh manage.py runserver 127.0.0.1:8000
 ```
 
-Windows PowerShell 示例：
+64 位 x86 Windows PowerShell：
 
 ```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
-.venv\Scripts\python.exe manage.py migrate
-.venv\Scripts\python.exe manage.py runserver
+.\scripts\bootstrap-windows.ps1
+.\scripts\python-project.ps1 manage.py migrate
+.\scripts\python-project.ps1 manage.py runserver 127.0.0.1:8000
 ```
 
-本地 `.env` 至少需要独立的开发 `SECRET_KEY` 和 `ENCRYPTION_KEY`。未提供 `DATABASE_URL` 时使用仓库内 SQLite。禁止复制 Railway 的数据库 URL、密钥或生产数据到本地。
+两个 bootstrap 脚本都会校验固定版本 uv 的下载文件，安装仓库内的 Python 3.12，并严格按 `uv.lock` 创建 `.venv/`。若 `.env` 不存在，脚本还会生成仅供本地开发使用的新密钥；已有 `.env` 永不覆盖。本地数据库默认使用 SQLite，禁止复制 Railway 的数据库 URL、密钥或生产数据到本地。
 
 ## 统一验证
 
+macOS：
+
 ```bash
-.venv/bin/python scripts/verify.py
+./scripts/python-project.sh scripts/verify.py
 ```
 
 Windows：
 
 ```powershell
-.venv\Scripts\python.exe scripts\verify.py
+.\scripts\python-project.ps1 scripts\verify.py
 ```
 
 该命令与 GitHub Actions 一致，依次执行：
 
 1. Markdown 本地链接、文件名大小写和 whitespace 检查
-2. `manage.py check`
-3. 全部 pytest 测试与 coverage 报告
+2. Python 版本及 `requirements*.txt` / `pyproject.toml` / `uv.lock` 直接依赖一致性检查
+3. `manage.py check`
+4. `manage.py makemigrations --check --dry-run`
+5. 全部 pytest 测试与 coverage 报告
 
-脚本只在子进程中为缺失的 `SECRET_KEY` / `ENCRYPTION_KEY` 提供固定的非生产验证值，使干净 CI 无需保存 secrets；已有环境变量不会被覆盖。
-
-统一门禁同时运行 `manage.py check`、`makemigrations --check --dry-run` 和完整 pytest；模型与 migration 状态不一致会直接失败。任何真实 schema 变更仍须单独审查 migration，并遵守跨系统 `ToDo.md` 中的生产数据库核验边界。
+脚本只在子进程中为缺失的 `SECRET_KEY` / `ENCRYPTION_KEY` 提供固定的非生产验证值，使干净 CI 无需保存 secrets；已有环境变量不会被覆盖。任何真实 schema 变更仍须单独审查 migration，并遵守跨系统 `ToDo.md` 中的生产数据库核验边界。
 
 ## API 总览
 
@@ -99,14 +99,18 @@ Windows：
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除；外部 LLM 调用不在该事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
-- Railway 启动命令来自 [Procfile](./Procfile)：先执行 migration 和 collectstatic，再启动 Gunicorn gthread worker。
 
 ## 部署
 
-默认分支由 Railway 自动部署。任何部署相关改动都必须独立审核以下内容：
+Railway 当前使用 Railpack。仓库同时保留 `requirements.txt` 和 uv 文件时，Railpack 优先执行 `pip install -r requirements.txt`；`.python-version` 将生产 Python 固定为 3.12。`requirements.txt` 必须始终包含 Gunicorn，不能依赖 uv 的可选依赖组。
 
-- 实际 builder 和 Python package manager
-- `requirements.txt`、未来的 lockfile 与 Gunicorn 安装路径
+当前 Railway 服务配置有独立的 Custom Start Command，会覆盖 [Procfile](./Procfile)。两者尚未统一前，应以 Railway 部署详情显示的命令为生产事实；计划中的 gthread worker 参数只有在移除或同步平台覆盖后才会生效。
+
+任何部署相关改动都必须独立审核以下内容：
+
+- 实际 builder、Python 版本和 package manager
+- `requirements.txt`、lockfile 与 Gunicorn 安装路径
+- 仓库 Procfile 与平台 Custom Start Command 是否一致
 - migration 是否向后兼容
 - 环境变量只核对名称与存在性，不把值写入仓库、日志或 PR
 

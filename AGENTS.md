@@ -18,8 +18,8 @@ These rules apply to the whole backend repository.
 
 ## Verification
 
-- Run `python scripts/verify.py` with the repository's Python 3.12 environment before handoff. On the isolated Mac setup, use `.venv/bin/python scripts/verify.py`; on Windows use `.venv\\Scripts\\python.exe scripts\\verify.py`.
-- The command runs documentation checks, Django system checks, migration-state checks, and the full pytest suite with coverage—the same checks used by GitHub Actions.
+- Run `python scripts/verify.py` with the repository's Python 3.12 environment before handoff. On the isolated Mac setup, use `./scripts/python-project.sh scripts/verify.py`; on Windows use `.\\scripts\\python-project.ps1 scripts\\verify.py`. These wrappers keep Python caches and tool state inside the repository.
+- The command runs documentation checks, Python/dependency contract checks, Django system checks, migration-state checks, and the full pytest suite with coverage—the same checks used by GitHub Actions.
 - Do not generate or apply an unreviewed production migration merely to silence model-state drift. Inspect every generated migration and keep schema-changing migrations separate from model-state-only fixes.
 - If CI is unavailable, run the unified command on the exact commit being reviewed, record the SHA, and require a clean worktree. Any later commit invalidates that result.
 
