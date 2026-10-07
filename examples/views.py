@@ -13,9 +13,11 @@ from .models import Article, Fragment
 from .serializers import (
     ArticleSerializer,
     ArticleListSerializer,
+    ConfirmSelectedSerializer,
     FragmentSerializer,
     MergeFragmentsSerializer,
     ResolveConflictSerializer,
+    ResolveConflictsSerializer,
 )
 from .embedding import get_embedding, tags_to_text
 from .llm_pipeline import segment_article, infer_tags
@@ -425,6 +427,72 @@ class ArticleBatchConfirmView(APIView):
         })
 
 
+class ArticleConfirmSelectedView(APIView):
+    """POST /api/examples/articles/:id/confirm-selected/"""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, article_id):
+        article = get_object_or_404(Article, id=article_id, owner=request.user)
+        serializer = ConfirmSelectedSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fragment_ids = serializer.validated_data['fragment_ids']
+
+        selected = list(
+            Fragment.objects.filter(
+                id__in=fragment_ids,
+                owner=request.user,
+                article=article,
+            )
+        )
+        if len(selected) != len(fragment_ids):
+            return Response({'error': '所选片段必须全部属于当前文章'}, status=400)
+        if any(
+            fragment.is_confirmed or fragment.fragment_type != 'story'
+            for fragment in selected
+        ):
+            return Response({'error': '所选片段状态已变化，请刷新后重试'}, status=409)
+
+        tag_text_by_id = {
+            fragment.id: tags_to_text(fragment.tags)
+            for fragment in selected
+        }
+        if any(not tag_text for tag_text in tag_text_by_id.values()):
+            return Response({'error': '所选片段必须全部包含有效标签'}, status=400)
+
+        from users.models import UserProviderKey
+        try:
+            gemini_key_obj = UserProviderKey.objects.get(
+                user=request.user,
+                provider='gemini',
+            )
+            api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
+        except UserProviderKey.DoesNotExist:
+            return Response({
+                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
+            }, status=400)
+
+        selected_by_id = {fragment.id: fragment for fragment in selected}
+        confirmed_ids, error_ids = [], []
+        for fragment_id in fragment_ids:
+            fragment = selected_by_id[fragment_id]
+            try:
+                tag_text = tag_text_by_id[fragment.id]
+                fragment.embedding = get_embedding(tag_text, api_key)
+                fragment.is_confirmed = True
+                fragment.save()
+                confirmed_ids.append(str(fragment.id))
+            except Exception:
+                logger.exception('Vectorization failed for fragment %s', fragment.id)
+                error_ids.append(str(fragment.id))
+
+        return Response({
+            'confirmed': len(confirmed_ids),
+            'errors': len(error_ids),
+            'error_ids': error_ids,
+        })
+
+
 # ── Fragment endpoints ────────────────────────────────────────────────────────
 
 class FragmentListView(APIView):
@@ -514,6 +582,14 @@ class FragmentResolveConflictView(APIView):
                 return Response({'error': '新旧片段必须属于同一篇文章'}, status=400)
             if not old_fragment.is_confirmed or new_fragment.is_confirmed:
                 return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+            if (
+                'old_updated_at' in data
+                and (
+                    old_fragment.updated_at != data['old_updated_at']
+                    or new_fragment.updated_at != data['new_updated_at']
+                )
+            ):
+                return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
 
             if action == 'keepOld':
                 preserved_fragment = old_fragment
@@ -561,6 +637,86 @@ class FragmentResolveConflictView(APIView):
             'residual_fragments': FragmentSerializer(residual_fragments, many=True).data,
             'deleted_fragment_id': str(deleted_fragment_id),
             'residual_count': len(residual_fragments),
+        })
+
+
+class FragmentResolveConflictsView(APIView):
+    """在一个事务中采用所有指定冲突对的新版。"""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = ResolveConflictsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        conflicts = serializer.validated_data['conflicts']
+        fragment_ids = {
+            fragment_id
+            for pair in conflicts
+            for fragment_id in (pair['old_fragment_id'], pair['new_fragment_id'])
+        }
+
+        with transaction.atomic():
+            fragments = list(
+                Fragment.objects.select_for_update()
+                .select_related('article')
+                .filter(
+                    owner=request.user,
+                    article__owner=request.user,
+                    id__in=fragment_ids,
+                )
+                .order_by('id')
+            )
+            if len(fragments) != len(fragment_ids):
+                raise Http404
+
+            fragments_by_id = {fragment.id: fragment for fragment in fragments}
+            article_ids = {fragment.article_id for fragment in fragments}
+            if None in article_ids or len(article_ids) != 1:
+                return Response({'error': '所有冲突片段必须属于同一篇文章'}, status=400)
+
+            for pair in conflicts:
+                old_fragment = fragments_by_id[pair['old_fragment_id']]
+                new_fragment = fragments_by_id[pair['new_fragment_id']]
+                if old_fragment.article_id != new_fragment.article_id:
+                    return Response({'error': '新旧片段必须属于同一篇文章'}, status=400)
+                if not old_fragment.is_confirmed or new_fragment.is_confirmed:
+                    return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+                if (
+                    old_fragment.updated_at != pair['old_updated_at']
+                    or new_fragment.updated_at != pair['new_updated_at']
+                ):
+                    return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+
+            article_id = next(iter(article_ids))
+            max_order = (
+                Fragment.objects.filter(article_id=article_id)
+                .aggregate(max_order=Max('order'))['max_order']
+            )
+            next_order = max(max_order if max_order is not None else 0, 0) + 1
+            residual_fragments: list[Fragment] = []
+            old_ids = []
+
+            for pair in conflicts:
+                old_fragment = fragments_by_id[pair['old_fragment_id']]
+                new_fragment = fragments_by_id[pair['new_fragment_id']]
+                old_ids.append(old_fragment.id)
+                for text in _extract_residuals(new_fragment.text, old_fragment.text):
+                    residual_fragments.append(Fragment(
+                        owner=request.user,
+                        article_id=article_id,
+                        character_id=old_fragment.article.character_id,
+                        text=text,
+                        order=next_order + len(residual_fragments),
+                        fragment_type='story',
+                    ))
+
+            Fragment.objects.bulk_create(residual_fragments)
+            Fragment.objects.filter(id__in=old_ids).delete()
+
+        return Response({
+            'resolved_count': len(conflicts),
+            'residual_count': len(residual_fragments),
+            'residual_fragments': FragmentSerializer(residual_fragments, many=True).data,
         })
 
 

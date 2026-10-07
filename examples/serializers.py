@@ -24,13 +24,59 @@ class FragmentSerializer(serializers.ModelSerializer):
 class ResolveConflictSerializer(serializers.Serializer):
     old_fragment_id = serializers.UUIDField()
     new_fragment_id = serializers.UUIDField()
+    # Compatibility window: the production frontend does not send versions yet.
+    # Once the frontend rollout is complete, make both fields required.
+    old_updated_at = serializers.DateTimeField(required=False)
+    new_updated_at = serializers.DateTimeField(required=False)
     action = serializers.ChoiceField(choices=['keepOld', 'keepNew'])
     edited_new_text = serializers.CharField(allow_blank=True, trim_whitespace=False)
 
     def validate(self, attrs):
         if attrs['old_fragment_id'] == attrs['new_fragment_id']:
             raise serializers.ValidationError('新旧片段不能是同一个片段')
+        has_old_version = 'old_updated_at' in attrs
+        has_new_version = 'new_updated_at' in attrs
+        if has_old_version != has_new_version:
+            raise serializers.ValidationError('新旧片段版本必须同时提供')
         return attrs
+
+
+class ConfirmSelectedSerializer(serializers.Serializer):
+    fragment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=False,
+    )
+
+    def validate_fragment_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError('片段 ID 不能重复')
+        return value
+
+
+class ConflictPairSerializer(serializers.Serializer):
+    old_fragment_id = serializers.UUIDField()
+    new_fragment_id = serializers.UUIDField()
+    old_updated_at = serializers.DateTimeField()
+    new_updated_at = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        if attrs['old_fragment_id'] == attrs['new_fragment_id']:
+            raise serializers.ValidationError('新旧片段不能是同一个片段')
+        return attrs
+
+
+class ResolveConflictsSerializer(serializers.Serializer):
+    conflicts = ConflictPairSerializer(many=True, allow_empty=False)
+
+    def validate_conflicts(self, value):
+        fragment_ids = [
+            fragment_id
+            for pair in value
+            for fragment_id in (pair['old_fragment_id'], pair['new_fragment_id'])
+        ]
+        if len(fragment_ids) != len(set(fragment_ids)):
+            raise serializers.ValidationError('同一片段不能出现在多个冲突对中')
+        return value
 
 
 class MergeFragmentsSerializer(serializers.Serializer):
