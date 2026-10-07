@@ -35,6 +35,8 @@ def _payload(old_fragment, new_fragment, action, edited_new_text):
     return {
         'oldFragmentId': str(old_fragment.id),
         'newFragmentId': str(new_fragment.id),
+        'oldUpdatedAt': old_fragment.updated_at.isoformat(),
+        'newUpdatedAt': new_fragment.updated_at.isoformat(),
         'action': action,
         'editedNewText': edited_new_text,
     }
@@ -284,3 +286,45 @@ def test_repeated_request_does_not_create_duplicate_residuals(api_client, user_f
     assert first_response.status_code == 200
     assert second_response.status_code == 404
     assert list(article.fragments.values_list('text', flat=True)) == ['共同内容\n旧版独有', '新版独有']
+
+
+@pytest.mark.django_db
+def test_rejects_stale_fragment_versions_without_writes(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_fragment = _fragment(article, '共同内容\n旧版独有', confirmed=True, order=1)
+    new_fragment = _fragment(article, '共同内容\n新版独有', confirmed=False, order=2)
+    payload = _payload(old_fragment, new_fragment, 'keepOld', new_fragment.text)
+    new_fragment.text = '并发修改后的新版'
+    new_fragment.save(update_fields=['text', 'updated_at'])
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(ENDPOINT, data=payload, format='json')
+
+    assert response.status_code == 409
+    old_fragment.refresh_from_db()
+    new_fragment.refresh_from_db()
+    assert old_fragment.is_confirmed is True
+    assert new_fragment.text == '并发修改后的新版'
+    assert article.fragments.count() == 2
+
+
+@pytest.mark.django_db
+def test_temporarily_accepts_legacy_request_without_versions(api_client, user_factory):
+    """后端先行发布期间，旧前端仍可提交单组冲突。"""
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_fragment = _fragment(article, '共同内容\n旧版独有', confirmed=True, order=1)
+    new_fragment = _fragment(article, '共同内容\n新版独有', confirmed=False, order=2)
+    payload = _payload(old_fragment, new_fragment, 'keepOld', new_fragment.text)
+    payload.pop('oldUpdatedAt')
+    payload.pop('newUpdatedAt')
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(ENDPOINT, data=payload, format='json')
+
+    assert response.status_code == 200
+    assert Fragment.objects.filter(id=old_fragment.id).exists()
+    assert not Fragment.objects.filter(id=new_fragment.id).exists()
