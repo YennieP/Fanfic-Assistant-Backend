@@ -11,6 +11,20 @@ from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
 
 
+class RecordingProvider(FakeProvider):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.calls = []
+
+    def complete(self, system_prompt, user_prompt, max_tokens=2000):
+        self.calls.append({
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'max_tokens': max_tokens,
+        })
+        return super().complete(system_prompt, user_prompt, max_tokens)
+
+
 def _endpoint(article):
     return f'/api/examples/articles/{article.id}/segment/'
 
@@ -104,6 +118,84 @@ def test_real_segmentation_pipeline_allows_unassigned_blank_lines(
     assert [(item['start'], item['end']) for item in validated] == expected_ranges
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('article_lines', 'gap_start', 'gap_end', 'provider_ranges', 'expected_ranges'),
+    [
+        (
+            ['', '开头正文', '已确认'],
+            0,
+            1,
+            [(1, 1, 'story')],
+            [(1, 1)],
+        ),
+        (
+            ['已确认前文', '', '中间一', '', '中间二', '已确认后文'],
+            1,
+            4,
+            [(2, 2, 'story'), (4, 4, 'story')],
+            [(2, 2), (4, 4)],
+        ),
+        (
+            ['已确认前文', '结尾正文', ''],
+            1,
+            2,
+            [(1, 1, 'story')],
+            [(1, 1)],
+        ),
+    ],
+    ids=['leading-gap', 'nonzero-middle-gap', 'trailing-gap'],
+)
+def test_real_segmentation_pipeline_uses_absolute_line_numbers_at_boundaries(
+    article_lines, gap_start, gap_end, provider_ranges, expected_ranges,
+):
+    provider = RecordingProvider(complete_text=json.dumps({
+        'segments': [
+            {'start': start, 'end': end, 'type': fragment_type}
+            for start, end, fragment_type in provider_ranges
+        ],
+    }))
+    gap_content = '\n'.join(article_lines[gap_start:gap_end + 1])
+
+    results = segment_article(gap_content, provider, global_start=gap_start)
+    validated = _validate_segment_results(
+        results, article_lines, gap_start, gap_end,
+    )
+
+    assert [(item['start'], item['end']) for item in validated] == expected_ranges
+
+
+@pytest.mark.django_db
+def test_segmentation_prompt_matches_the_validator_protocol_for_a_nonzero_gap():
+    provider = RecordingProvider(complete_text=json.dumps({
+        'segments': [
+            {'start': 121, 'end': 121, 'type': 'story'},
+            {'start': 123, 'end': 123, 'type': 'story'},
+        ],
+    }))
+
+    segment_article(
+        '\n正文一\n\n正文二',
+        provider,
+        global_start=120,
+        prev_context='前置已确认内容',
+        next_context='后置已确认内容',
+    )
+
+    call = provider.calls[0]
+    system_prompt = call['system_prompt']
+    user_prompt = call['user_prompt']
+    assert '每个非空行必须恰好属于一个片段' in system_prompt
+    assert '空白行可以并入相邻片段，也可以不分配' in system_prompt
+    assert '不得为纯空白行单独创建片段' in system_prompt
+    assert '不要从 0 重新编号' in system_prompt
+    assert '"start": 0' not in system_prompt
+    assert '本次允许返回的行号范围：120 到 123（均包含）' in user_prompt
+    assert '120: ' in user_prompt
+    assert '121: 正文一' in user_prompt
+    assert '123: 正文二' in user_prompt
+
+
 @pytest.mark.django_db(transaction=True)
 def test_api_replaces_old_draft_when_gap_starts_with_a_blank_line(
     api_client, make_user_with_key, monkeypatch,
@@ -177,12 +269,13 @@ def test_keeps_previous_drafts_when_a_later_gap_generation_fails(
     [
         [],
         [{'text': '零', 'type': 'story', 'start': 0, 'end': 0}],
+        [{'text': '三\n四', 'type': 'story', 'start': 3, 'end': 5}],
         [
             {'text': '零\n一', 'type': 'story', 'start': 0, 'end': 1},
             {'text': '一', 'type': 'story', 'start': 1, 'end': 1},
         ],
     ],
-    ids=['empty', 'incomplete', 'overlapping'],
+    ids=['empty', 'incomplete', 'outside-gap', 'overlapping'],
 )
 def test_keeps_previous_drafts_when_a_gap_result_is_invalid(
     api_client, make_user_with_key, monkeypatch, generated,

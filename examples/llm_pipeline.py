@@ -35,8 +35,10 @@ SEGMENTATION_SYSTEM_PROMPT = """你是一个专业的同人文分析助手。
 
 【切割规则】
 - 每个片段是一个"情节场景单元"，按情节完整性和情感弧度切割
-- 必须覆盖所有行，不得遗漏任何一行（章节标题、作者注等也要纳入，标记为 skip）
-- 行号已在内容中标注，使用标注的实际行号填写 start 和 end（inclusive）
+- 每个非空行必须恰好属于一个片段，不得遗漏或重复覆盖
+- 空白行可以并入相邻片段，也可以不分配；不得为纯空白行单独创建片段
+- 行号已在内容中标注，start 和 end 必须复制输入中实际出现的行号，不要从 0 重新编号
+- start 和 end 均包含在片段范围内（inclusive），且不得超出本次允许返回的行号范围
 - type 取值：
     story = 有情节价值、可作为风格参考入库的对话/叙事片段
     skip  = 章节标题、作者注、过渡段等无情节价值的内容
@@ -49,7 +51,7 @@ SEGMENTATION_SYSTEM_PROMPT = """你是一个专业的同人文分析助手。
 
 【返回格式】
 严格返回 JSON，不要 markdown 代码块，不要任何解释：
-{"segments": [{"start": 0, "end": 5, "type": "story"}, {"start": 6, "end": 7, "type": "skip"}, ...]}"""
+顶层对象只能包含 segments 数组；数组中每项只能包含整数 start、整数 end 和字符串 type。"""
 
 
 def segment_article(
@@ -83,9 +85,13 @@ def segment_article(
 
     all_segments: list[dict] = []
 
-    for chunk_idx, (chunk_text, _) in enumerate(chunks):
+    chunk_line_offset = 0
+    for chunk_idx, (chunk_text, chunk_line_count) in enumerate(chunks):
         is_first = chunk_idx == 0
         is_last  = chunk_idx == len(chunks) - 1
+        chunk_start = global_start + chunk_line_offset
+        chunk_end = chunk_start + chunk_line_count - 1
+        chunk_line_offset += chunk_line_count
 
         prefix = ''
         if is_first and prev_snippet:
@@ -101,7 +107,13 @@ def segment_article(
                 f'{next_snippet}'
             )
 
-        _seg_prompt = f'{prefix}请切割以下文章片段（行号已标注）：\n\n{chunk_text}{suffix}'
+        _seg_prompt = (
+            f'{prefix}'
+            f'本次允许返回的行号范围：{chunk_start} 到 {chunk_end}（均包含）。\n'
+            '只复制下方每行冒号前的实际行号，不要重新编号。\n'
+            f'请切割以下文章片段（行号已标注）：\n\n{chunk_text}'
+            f'{suffix}'
+        )
 
         @log_llm_call(feature='segment_article', sync=True)
         def _call_segment(user=None, generation_id=None):
