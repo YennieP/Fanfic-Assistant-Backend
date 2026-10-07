@@ -100,7 +100,7 @@ Windows：
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除；外部 LLM 调用不在该事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
-- `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表。
+- `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表；Railway 固定使用的 `healthcheck.railway.app` Host 已显式加入允许列表，其他部署域名仍由 `ALLOWED_HOSTS` 环境变量控制。
 
 ## 部署
 

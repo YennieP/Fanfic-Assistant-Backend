@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.conf import settings
 from django.db import DatabaseError
 from django.test import Client
 from logs.middleware import EXCLUDE_PREFIXES
@@ -38,3 +39,11 @@ def test_readiness_returns_503_without_leaking_database_error():
 def test_health_requests_do_not_depend_on_database_logging():
     for path in ('/health/', '/health/live/'):
         assert any(path.startswith(prefix) for prefix in EXCLUDE_PREFIXES)
+
+
+def test_railway_healthcheck_host_is_allowed():
+    response = Client().get('/health/live/', HTTP_HOST='healthcheck.railway.app')
+
+    assert 'healthcheck.railway.app' in settings.ALLOWED_HOSTS
+    assert response.status_code == 200
+    assert response.json() == {'status': 'ok'}

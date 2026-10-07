@@ -11,7 +11,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY') # Django 用于签名 session、CSRF token 等的密钥。
 DEBUG = os.getenv('DEBUG', 'False') == 'True' # 将环境变量中的字符串T/F转换为boolean格式的T/F
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') # 从环境变量中获取允许访问的主机名列表，转换为list。如果获取的变量ALLOWED_HOSTS不存在，则默认为localhost
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+] # 从环境变量中获取允许访问的主机名列表；本地默认只允许 localhost
+
+# Railway 的平台健康检查使用固定 Host 请求头；显式允许该主机，避免正常启动的
+# deployment 因 Django DisallowedHost 返回 400 而被错误判定为不健康。
+RAILWAY_HEALTHCHECK_HOST = 'healthcheck.railway.app'
+if RAILWAY_HEALTHCHECK_HOST not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RAILWAY_HEALTHCHECK_HOST)
 
 # 项目中所有已激活的app。用于进行模型发现、数据库迁移等操作。
 INSTALLED_APPS = [
