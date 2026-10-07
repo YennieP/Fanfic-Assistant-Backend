@@ -113,6 +113,67 @@ def _find_gaps(confirmed_fragments: list, total_lines: int) -> list[tuple[int, i
     return gaps
 
 
+def _validate_segment_results(
+    segment_results: list[dict],
+    lines: list[str],
+    gap_start: int,
+    gap_end: int,
+) -> list[dict]:
+    """验证非空原文行恰好覆盖一次；允许片段之间只遗漏空白行。"""
+    if not segment_results:
+        if any(lines[index].strip() for index in range(gap_start, gap_end + 1)):
+            raise ValueError('empty segment result')
+        return []
+
+    try:
+        ordered = sorted(segment_results, key=lambda segment: segment['start'])
+    except (KeyError, TypeError):
+        raise ValueError('segment result is missing a valid start line') from None
+
+    previous_end = gap_start - 1
+    covered_lines: set[int] = set()
+    validated: list[dict] = []
+    for segment in ordered:
+        start = segment.get('start')
+        end = segment.get('end')
+        fragment_type = segment.get('type')
+        if type(start) is not int or type(end) is not int:
+            raise ValueError('segment range must use integer line numbers')
+        if start < gap_start or end < start or end > gap_end:
+            raise ValueError('segment range is outside the requested gap')
+        if start <= previous_end:
+            raise ValueError('segment ranges must not overlap')
+        if fragment_type not in ('story', 'skip'):
+            raise ValueError('segment type is invalid')
+
+        expected_text = '\n'.join(lines[start:end + 1]).strip()
+        segment_text = segment.get('text')
+        if (
+            not expected_text
+            or not isinstance(segment_text, str)
+            or segment_text.strip() != expected_text
+        ):
+            raise ValueError('segment text does not match its source range')
+
+        validated.append({
+            'text': expected_text,
+            'type': fragment_type,
+            'start': start,
+            'end': end,
+        })
+        covered_lines.update(range(start, end + 1))
+        previous_end = end
+
+    missing_content_lines = [
+        index
+        for index in range(gap_start, gap_end + 1)
+        if lines[index].strip() and index not in covered_lines
+    ]
+    if missing_content_lines:
+        raise ValueError('segment ranges do not cover every non-empty source line')
+    return validated
+
+
 # ── Article endpoints ─────────────────────────────────────────────────────────
 
 class ArticleListView(APIView):
@@ -179,8 +240,8 @@ class ArticleSegmentView(APIView):
        - 找前方最近的已确认片段 → prev_context（末尾若干行）
        - 找后方最近的已确认片段 → next_context（开头若干行）
        - 调用 LLM 仅切割该缺口范围内的内容
-    3. 将所有新片段合并，order 按 start_line 排序保证正确顺序
-    4. 在每个缺口范围内清理旧的未确认片段（避免重复）
+    3. 先在内存中验证所有缺口结果，任一失败都保留上一轮草稿
+    4. 在短事务中删除旧的未确认片段并批量创建全部新片段
 
     三种缺口位置：
       - 缺口在正文开头：只有 next_context（无前置）
@@ -219,15 +280,6 @@ class ArticleSegmentView(APIView):
                 'message': '所有内容已分割完毕，无需重新切割',
             })
 
-        # ── 清理各缺口内的旧未确认片段 ────────────────────────────────────────
-        for gap_start, gap_end in gaps:
-            article.fragments.filter(is_confirmed=False).filter(
-                Q(start_line__gte=gap_start, start_line__lte=gap_end) |
-                Q(end_line__gte=gap_start,   end_line__lte=gap_end)
-            ).delete()
-        # 清理无行号的旧格式未确认片段
-        article.fragments.filter(is_confirmed=False, start_line__isnull=True).delete()
-
         # ── 为每个缺口找前后上下文 ────────────────────────────────────────────
         # 构建 {end_line: fragment} 和 {start_line: fragment} 两个查找表
         by_end   = {f.end_line:   f for f in confirmed}
@@ -249,11 +301,7 @@ class ArticleSegmentView(APIView):
         except Exception as e:
             return Response({'error': f'获取 LLM provider 失败：{str(e)}'}, status=400)
 
-        all_new_fragments: list[Fragment] = []
-        # order 用 start_line 保证全局读取顺序
-        next_order_base = (
-            article.fragments.aggregate(max_order=Max('order'))['max_order'] or -1
-        ) + 1
+        pending_fragments: list[Fragment] = []
 
         for gap_idx, (gap_start, gap_end) in enumerate(gaps):
             gap_content = '\n'.join(lines[gap_start:gap_end + 1])
@@ -279,12 +327,23 @@ class ArticleSegmentView(APIView):
                     return Response({'error': 'LLM 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
                 return Response({'error': f'切割失败：{err_str}'}, status=500)
 
-            if not segment_results:
-                logger.warning('Empty segment result for gap %d-%d', gap_start, gap_end)
-                continue
+            try:
+                validated_results = _validate_segment_results(
+                    segment_results, lines, gap_start, gap_end,
+                )
+            except ValueError as e:
+                logger.warning(
+                    'Invalid segment result for gap %d-%d: %s',
+                    gap_start,
+                    gap_end,
+                    e,
+                )
+                return Response({
+                    'error': 'LLM 返回了空或不完整的切割结果，请稍后重试',
+                }, status=503)
 
-            for seg in segment_results:
-                f = Fragment.objects.create(
+            for seg in validated_results:
+                pending_fragments.append(Fragment(
                     owner=request.user,
                     article=article,
                     character=article.character,
@@ -293,15 +352,35 @@ class ArticleSegmentView(APIView):
                     start_line=seg['start'],
                     end_line=seg['end'],
                     order=seg['start'],  # 用 start_line 作 order，保证全文阅读顺序
-                )
-                all_new_fragments.append(f)
+                ))
 
-        if not all_new_fragments:
+        if not pending_fragments:
             return Response({'error': 'LLM 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
 
+        replacement_range = Q(start_line__isnull=True) | Q(end_line__isnull=True)
+        for gap_start, gap_end in gaps:
+            replacement_range |= (
+                Q(start_line__lte=gap_end, end_line__gte=gap_start)
+            )
+
+        try:
+            with transaction.atomic():
+                # 串行化同一文章的最终替换，但绝不在等待 LLM 时持有事务。
+                locked_article = Article.objects.select_for_update().get(
+                    id=article.id,
+                    owner=request.user,
+                )
+                locked_article.fragments.filter(
+                    is_confirmed=False,
+                ).filter(replacement_range).delete()
+                Fragment.objects.bulk_create(pending_fragments)
+        except Exception:
+            logger.exception('Failed to replace segmented drafts for article %s', article.id)
+            return Response({'error': '保存切割结果失败，请重试'}, status=500)
+
         return Response({
-            'count':     len(all_new_fragments),
-            'fragments': FragmentSerializer(all_new_fragments, many=True).data,
+            'count':     len(pending_fragments),
+            'fragments': FragmentSerializer(pending_fragments, many=True).data,
         })
 
 
