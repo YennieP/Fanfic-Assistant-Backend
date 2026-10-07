@@ -18,9 +18,17 @@ These rules apply to the whole backend repository.
 
 ## Cross-system ToDo review
 
-- Whenever backend work adds, removes, or changes an entry in the frontend repository's `docs/ToDo.md`, read the complete ToDo and perform the same cross-impact review required by the frontend `AGENTS.md`; do not update only the target row.
-- At minimum, review priority and execution order, dependencies or overlap with existing IDs, frontend/backend API and deployment order, data compatibility and migrations, pending asynchronous writes or unsaved user drafts, required tests, and documentation ownership.
-- Update every affected entry in the same change and report affected IDs plus API, deployment, migration, data, test, and implementation-document impact in the handoff. Mechanical documentation checks do not replace this semantic review.
+- Apply both the planning impact review and the completion impact review defined by the frontend `AGENTS.md` whenever backend work adds, edits, closes, or otherwise affects an entry in the frontend repository's `docs/ToDo.md`; do not update only the target row.
+- At planning time, review priority and execution order, dependencies or overlap with existing IDs, frontend/backend API and deployment order, data compatibility and migrations, pending asynchronous writes or unsaved user drafts, required tests, and documentation ownership.
+- At completion time, compare the plan with the actual backend diff and final CI/deployment evidence, update the cross-system `IMPLEMENTATION.md`, create follow-up gaps, re-rank remaining work, and only then remove the completed ID. Production-dependent work must remain open until production evidence exists.
+- Report closed and affected IDs plus actual API, deployment, migration, data, test, and documentation impact in the handoff. Mechanical documentation checks do not replace either semantic review.
+
+## Change delivery
+
+- A direct push to `main` is permitted only for low-risk documentation maintenance whose diff is Markdown-only, does not change repository governance or product/design commitments, and does not modify code, tests, scripts, workflows, configuration, dependencies, lockfiles, or migrations. Typical examples are typo/link corrections and evidence-backed status synchronization.
+- A documentation-only cross-system ToDo closure may be pushed directly only after all required merged-main CI, deployment, or production evidence exists, both impact reviews pass, the frontend repository's durable record and remaining priority order are updated, and its documentation gate passes against the pre-closure SHA.
+- Changes to `AGENTS.md`, `.github/**`, `scripts/**`, executable validation logic, or any non-documentation file must go through a pull request, even when most of the change is documentation.
+- Mixed changes and ambiguous cases default to a pull request.
 
 ## Verification
 
