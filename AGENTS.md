@@ -16,6 +16,12 @@ These rules apply to the whole backend repository.
 - Do not rewrite product design to match an implementation shortcut. Record the deviation and track the remaining gap.
 - Do not duplicate detailed status tables in this repository. Link to the cross-system source of truth.
 
+## Cross-system ToDo review
+
+- Whenever backend work adds, removes, or changes an entry in the frontend repository's `docs/ToDo.md`, read the complete ToDo and perform the same cross-impact review required by the frontend `AGENTS.md`; do not update only the target row.
+- At minimum, review priority and execution order, dependencies or overlap with existing IDs, frontend/backend API and deployment order, data compatibility and migrations, pending asynchronous writes or unsaved user drafts, required tests, and documentation ownership.
+- Update every affected entry in the same change and report affected IDs plus API, deployment, migration, data, test, and implementation-document impact in the handoff. Mechanical documentation checks do not replace this semantic review.
+
 ## Verification
 
 - Run `python scripts/verify.py` with the repository's Python 3.12 environment before handoff. On the isolated Mac setup, use `./scripts/python-project.sh scripts/verify.py`; on Windows use `.\\scripts\\python-project.ps1 scripts\\verify.py`. These wrappers keep Python caches and tool state inside the repository.
