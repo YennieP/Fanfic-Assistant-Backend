@@ -386,47 +386,6 @@ class ArticleSegmentView(APIView):
         })
 
 
-class ArticleBatchConfirmView(APIView):
-    """POST /api/examples/articles/:id/confirm-all/"""
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request, article_id):
-        article = get_object_or_404(Article, id=article_id, owner=request.user)
-
-        from users.models import UserProviderKey
-        try:
-            gemini_key_obj = UserProviderKey.objects.get(user=request.user, provider='gemini')
-            api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
-        except UserProviderKey.DoesNotExist:
-            return Response({
-                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
-            }, status=400)
-
-        to_confirm = article.fragments.filter(
-            is_confirmed=False, fragment_type='story',
-        ).exclude(tags={})
-
-        confirmed_ids, error_ids = [], []
-        for fragment in to_confirm:
-            try:
-                tag_text = tags_to_text(fragment.tags)
-                if not tag_text:
-                    continue
-                fragment.embedding    = get_embedding(tag_text, api_key)
-                fragment.is_confirmed = True
-                fragment.save()
-                confirmed_ids.append(str(fragment.id))
-            except Exception:
-                logger.exception('Vectorization failed for fragment %s', fragment.id)
-                error_ids.append(str(fragment.id))
-
-        return Response({
-            'confirmed': len(confirmed_ids),
-            'errors':    len(error_ids),
-            'error_ids': error_ids,
-        })
-
-
 class ArticleConfirmSelectedView(APIView):
     """POST /api/examples/articles/:id/confirm-selected/"""
 
@@ -583,11 +542,8 @@ class FragmentResolveConflictView(APIView):
             if not old_fragment.is_confirmed or new_fragment.is_confirmed:
                 return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
             if (
-                'old_updated_at' in data
-                and (
-                    old_fragment.updated_at != data['old_updated_at']
-                    or new_fragment.updated_at != data['new_updated_at']
-                )
+                old_fragment.updated_at != data['old_updated_at']
+                or new_fragment.updated_at != data['new_updated_at']
             ):
                 return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
 
