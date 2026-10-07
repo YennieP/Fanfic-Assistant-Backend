@@ -85,7 +85,7 @@ Windows：
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
 | Generation | `/api/generate/stream/` | SSE 流式生成 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
-| Articles | `/api/examples/articles/` | 文章 CRUD、segment、confirm-all |
+| Articles | `/api/examples/articles/` | 文章 CRUD、segment、confirm-all；segment 会先完成并验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
 | Fragments | `/api/examples/fragments/` | 片段列表/创建、详情、infer-tags、confirm |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/` | 在一个事务中处理重叠片段 |
