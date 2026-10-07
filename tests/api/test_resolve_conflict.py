@@ -311,20 +311,29 @@ def test_rejects_stale_fragment_versions_without_writes(api_client, user_factory
 
 
 @pytest.mark.django_db
-def test_temporarily_accepts_legacy_request_without_versions(api_client, user_factory):
-    """后端先行发布期间，旧前端仍可提交单组冲突。"""
+@pytest.mark.parametrize(
+    'missing_fields',
+    [
+        ('oldUpdatedAt',),
+        ('newUpdatedAt',),
+        ('oldUpdatedAt', 'newUpdatedAt'),
+    ],
+)
+def test_requires_both_fragment_versions_without_writes(
+    api_client, user_factory, missing_fields,
+):
     user = user_factory()
     character = BaseCardFactory(owner=user)
     article = _article(user, character)
     old_fragment = _fragment(article, '共同内容\n旧版独有', confirmed=True, order=1)
     new_fragment = _fragment(article, '共同内容\n新版独有', confirmed=False, order=2)
     payload = _payload(old_fragment, new_fragment, 'keepOld', new_fragment.text)
-    payload.pop('oldUpdatedAt')
-    payload.pop('newUpdatedAt')
+    for field in missing_fields:
+        payload.pop(field)
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')
 
-    assert response.status_code == 200
+    assert response.status_code == 400
     assert Fragment.objects.filter(id=old_fragment.id).exists()
-    assert not Fragment.objects.filter(id=new_fragment.id).exists()
+    assert Fragment.objects.filter(id=new_fragment.id).exists()

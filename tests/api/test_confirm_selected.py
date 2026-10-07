@@ -10,6 +10,10 @@ def _endpoint(article):
     return f'/api/examples/articles/{article.id}/confirm-selected/'
 
 
+def _retired_endpoint(article):
+    return f'/api/examples/articles/{article.id}/confirm-all/'
+
+
 def _article(user, character, title='测试文章'):
     return Article.objects.create(
         owner=user,
@@ -153,3 +157,18 @@ def test_rejects_the_whole_selection_before_embedding_when_tags_have_no_effectiv
     ineffective_fragment.refresh_from_db()
     assert valid_fragment.is_confirmed is False
     assert ineffective_fragment.is_confirmed is False
+
+
+@pytest.mark.django_db
+def test_retired_confirm_all_route_is_not_available(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, '不能被旧入口入库', order=1)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_retired_endpoint(article), data={}, format='json')
+
+    assert response.status_code == 404
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False

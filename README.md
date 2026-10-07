@@ -85,10 +85,10 @@ Windows：
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
 | Generation | `/api/generate/stream/` | SSE 流式生成 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
-| Articles | `/api/examples/articles/` | 文章 CRUD、segment、兼容期 confirm-all，以及只处理显式片段 ID 的 confirm-selected；segment 会先完成并验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
+| Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；segment 会先完成并验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
 | Fragments | `/api/examples/fragments/` | 片段列表/创建、详情、infer-tags、confirm |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
-| Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组处理支持双方版本校验；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
+| Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
 路由细节以各 app 的 `urls.py` 与 serializer 为准。新增或修改 endpoint 时，应同步本表和跨系统实现稿。
 
@@ -97,8 +97,9 @@ Windows：
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。
-- `confirm-selected` 只处理请求中显式列出的、属于当前文章且包含可向量化有效标签的片段 ID；若任一片段没有有效标签，会在调用 embedding 前拒绝整批请求。旧 `confirm-all` 在前后端滚动发布期间暂时保留。
-- `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除；新前端会发送双方 `updated_at`，兼容期内旧前端仍可省略版本。`resolve-conflicts` 必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；外部 LLM 调用不在这些事务中。
+- `confirm-selected` 只处理请求中显式列出的、属于当前文章且包含可向量化有效标签的片段 ID；若任一片段没有有效标签，会在调用 embedding 前拒绝整批请求。旧 `confirm-all` 已在前端切换完成后退役，避免绕过显式范围约束。
+- 单组冲突处理必须同时提交旧、新片段的 `updated_at` 版本；版本缺失或与当前记录不一致时不会执行写入。
+- `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除，并要求提交双方 `updated_at`。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；外部 LLM 调用不在这些事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
 - `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表；Railway 固定使用的 `healthcheck.railway.app` Host 已显式加入允许列表，其他部署域名仍由 `ALLOWED_HOSTS` 环境变量控制。

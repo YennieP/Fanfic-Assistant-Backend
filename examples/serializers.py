@@ -24,20 +24,14 @@ class FragmentSerializer(serializers.ModelSerializer):
 class ResolveConflictSerializer(serializers.Serializer):
     old_fragment_id = serializers.UUIDField()
     new_fragment_id = serializers.UUIDField()
-    # Compatibility window: the production frontend does not send versions yet.
-    # Once the frontend rollout is complete, make both fields required.
-    old_updated_at = serializers.DateTimeField(required=False)
-    new_updated_at = serializers.DateTimeField(required=False)
+    old_updated_at = serializers.DateTimeField()
+    new_updated_at = serializers.DateTimeField()
     action = serializers.ChoiceField(choices=['keepOld', 'keepNew'])
     edited_new_text = serializers.CharField(allow_blank=True, trim_whitespace=False)
 
     def validate(self, attrs):
         if attrs['old_fragment_id'] == attrs['new_fragment_id']:
             raise serializers.ValidationError('新旧片段不能是同一个片段')
-        has_old_version = 'old_updated_at' in attrs
-        has_new_version = 'new_updated_at' in attrs
-        if has_old_version != has_new_version:
-            raise serializers.ValidationError('新旧片段版本必须同时提供')
         return attrs
 
 
