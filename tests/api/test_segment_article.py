@@ -344,6 +344,11 @@ def test_keeps_previous_drafts_when_a_later_gap_generation_fails(
     response = api_client.post(_endpoint(article), format='json')
 
     assert response.status_code == 500
+    assert response.json() == {
+        'code': 'generation_failed',
+        'detail': '切割失败，请稍后重试',
+    }
+    assert 'simulated second gap failure' not in response.content.decode()
     assert calls == [0, 3]
     assert Fragment.objects.filter(id=confirmed.id).exists()
     assert Fragment.objects.filter(id=first_draft.id).exists()

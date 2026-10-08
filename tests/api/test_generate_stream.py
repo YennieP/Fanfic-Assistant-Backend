@@ -156,7 +156,8 @@ def test_stream_error_records_business_failure(
     assert events[-1] == {'type': 'error', 'code': expected_code}
     log = LlmCallLog.objects.get(feature='character_generate')
     assert log.status == LlmCallLog.Status.ERROR
-    assert str(provider_error) in log.error_message
+    assert log.error_message == expected_code
+    assert str(provider_error) not in log.error_message
 
 
 @pytest.mark.django_db

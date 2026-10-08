@@ -12,7 +12,7 @@ _RETRYABLE_STATUS = {500, 529}
 
 
 class AnthropicProvider(BaseProvider):
-    MODEL = 'claude-sonnet-4-20250514'
+    MODEL = 'claude-sonnet-4-6'
 
     def stream(self, system_prompt: str, user_prompt: str):
         """
@@ -44,23 +44,49 @@ class AnthropicProvider(BaseProvider):
                 return  # 成功完成
 
             except anthropic_sdk.AuthenticationError:
-                raise ProviderError('Anthropic API Key 无效', code='provider_key_invalid')
+                raise ProviderError(
+                    'Anthropic API Key 无效', code='provider_key_invalid'
+                ) from None
 
             except anthropic_sdk.RateLimitError:
-                raise ProviderError('Anthropic 请求频率超限', code='provider_rate_limit')
+                raise ProviderError(
+                    'Anthropic 请求频率超限',
+                    code='provider_rate_limit',
+                    http_status=429,
+                ) from None
 
             except anthropic_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0 and not started:
-                    logger.warning('Anthropic %s on attempt %d, retrying: %s', e.status_code, attempt + 1, e)
+                    logger.warning(
+                        'Anthropic status=%s model=%s attempt=%d; retrying',
+                        e.status_code, self.MODEL, attempt + 1,
+                    )
                     time.sleep(2)
                     continue
-                raise
+                if e.status_code == 404:
+                    raise ProviderError(
+                        'Anthropic 当前配置的模型不可用',
+                        code='provider_model_unavailable',
+                        http_status=503,
+                    ) from None
+                raise ProviderError(
+                    'Anthropic 请求失败，请稍后重试',
+                    code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
 
             except anthropic_sdk.APIConnectionError as e:
                 if attempt == 0 and not started:
-                    logger.warning('Anthropic connection error on attempt %d, retrying: %s', attempt + 1, e)
+                    logger.warning(
+                        'Anthropic connection error model=%s attempt=%d; retrying',
+                        self.MODEL, attempt + 1,
+                    )
                     continue
-                raise
+                raise ProviderError(
+                    'Anthropic 连接失败，请稍后重试',
+                    code='provider_connection_failed',
+                    http_status=503,
+                ) from None
 
     def complete(
         self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
@@ -83,20 +109,46 @@ class AnthropicProvider(BaseProvider):
                 )
 
             except anthropic_sdk.AuthenticationError:
-                raise ProviderError('Anthropic API Key 无效', code='provider_key_invalid')
+                raise ProviderError(
+                    'Anthropic API Key 无效', code='provider_key_invalid'
+                ) from None
 
             except anthropic_sdk.RateLimitError:
-                raise ProviderError('Anthropic 请求频率超限', code='provider_rate_limit')
+                raise ProviderError(
+                    'Anthropic 请求频率超限',
+                    code='provider_rate_limit',
+                    http_status=429,
+                ) from None
 
             except anthropic_sdk.APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUS and attempt == 0:
-                    logger.warning('Anthropic %s on attempt %d, retrying: %s', e.status_code, attempt + 1, e)
+                    logger.warning(
+                        'Anthropic status=%s model=%s attempt=%d; retrying',
+                        e.status_code, self.MODEL, attempt + 1,
+                    )
                     time.sleep(2)
                     continue
-                raise
+                if e.status_code == 404:
+                    raise ProviderError(
+                        'Anthropic 当前配置的模型不可用',
+                        code='provider_model_unavailable',
+                        http_status=503,
+                    ) from None
+                raise ProviderError(
+                    'Anthropic 请求失败，请稍后重试',
+                    code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
 
             except anthropic_sdk.APIConnectionError as e:
                 if attempt == 0:
-                    logger.warning('Anthropic connection error on attempt %d, retrying: %s', attempt + 1, e)
+                    logger.warning(
+                        'Anthropic connection error model=%s attempt=%d; retrying',
+                        self.MODEL, attempt + 1,
+                    )
                     continue
-                raise
+                raise ProviderError(
+                    'Anthropic 连接失败，请稍后重试',
+                    code='provider_connection_failed',
+                    http_status=503,
+                ) from None

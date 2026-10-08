@@ -128,8 +128,11 @@ def _get_style_fragments(
 
         return results
 
-    except Exception:
-        logger.exception('Style fragment retrieval failed, proceeding without injection')
+    except Exception as e:
+        logger.error(
+            'Style fragment retrieval failed type=%s; proceeding without injection',
+            type(e).__name__,
+        )
         return []
 
 
@@ -301,8 +304,11 @@ class GenerateStreamView(APIView):
                 data = json.dumps({'type': 'error', 'code': e.code}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
             except Exception as e:
-                # 非预期技术异常，记录完整 traceback 供排查，前端使用 generation_failed 兜底文案
-                logger.exception('LLM streaming unexpected error')
+                # Provider SDK 的响应正文可能包含请求或用户标识；这里只记录异常类型。
+                logger.error(
+                    'LLM streaming unexpected error type=%s',
+                    type(e).__name__,
+                )
                 data = json.dumps({'type': 'error', 'code': 'generation_failed'}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
 

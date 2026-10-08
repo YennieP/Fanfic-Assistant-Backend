@@ -95,6 +95,8 @@ Windows：
 ## 关键运行边界
 
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
+- 当前文本模型为 Anthropic `claude-sonnet-4-6`、Gemini `gemini-2.5-flash`、Groq `openai/gpt-oss-120b`、Cerebras `gpt-oss-120b`。OpenRouter 的旧固定免费模型已不可用，在确定固定免费模型或实验性动态免费路由前不会自动切换到付费模型。
+- GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。
 - 文章自动切割要求 provider 复制输入中标注的绝对行号，`start` / `end` 均为 inclusive；每个非空行必须恰好覆盖一次，空白行可以并入相邻片段或省略，但纯空白片段、重叠和越出当前 gap 的范围均会被拒绝。编号后文本按包含换行符的 3000 字符或 100 行上限分块，以先达到者为准；接近硬上限时优先退回最近 20 行内的空白行边界，避免人为切断相邻情节。单个超长原文行不会从行内拆开，以免破坏绝对行号协议。当前不猜测性修正 EOF 多一行等越界结果。

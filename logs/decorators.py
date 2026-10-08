@@ -44,13 +44,15 @@ def log_llm_call(feature: str, sync: bool = False):
             try:
                 result = func(*args, **kwargs)
             except Exception as e:
+                from generation.providers.base import safe_error_summary
                 latency = int((time.monotonic() - start) * 1000)
                 _log(
                     sync=sync, generation_id=generation_id,
                     feature=feature, model_name='',
                     prompt_tokens=0, completion_tokens=0,
                     latency_ms=latency, status='error',
-                    error_message=str(e), request_id=req_id, user_id=user_id,
+                    error_message=safe_error_summary(e),
+                    request_id=req_id, user_id=user_id,
                 )
                 raise
 
@@ -119,13 +121,15 @@ def _wrap_generator(gen, feature, start, user_id, req_id, sync, generation_id):
         )
         raise
     except Exception as e:
+        from generation.providers.base import safe_error_summary
         latency = int((time.monotonic() - start) * 1000)
         _log(
             sync=sync, generation_id=generation_id,
             feature=feature, model_name='',
             prompt_tokens=0, completion_tokens=0,
             latency_ms=latency, status='error',
-            error_message=str(e), request_id=req_id, user_id=user_id,
+            error_message=safe_error_summary(e),
+            request_id=req_id, user_id=user_id,
         )
         raise
     else:

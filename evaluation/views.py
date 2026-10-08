@@ -17,6 +17,7 @@ from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.openrouter import OpenRouterProvider
+from generation.providers.base import ProviderError
 from .models import ConsistencyScore
 from .prompt import build_judge_prompt
 
@@ -169,9 +170,14 @@ class EvaluateView(APIView):
 
         try:
             result_text = _call_judge(user=request.user, generation_id=judge_id)
+        except ProviderError:
+            raise
         except Exception as e:
-            logger.exception('Judge LLM call failed')
-            return Response({'error': f'评估调用失败：{str(e)}'}, status=500)
+            logger.error('Judge LLM call failed type=%s', type(e).__name__)
+            return Response(
+                {'code': 'generation_failed', 'detail': '评估调用失败，请稍后重试'},
+                status=500,
+            )
 
         try:
             score, reasoning = _parse_judge_response(result_text)

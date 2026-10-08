@@ -26,6 +26,7 @@ from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.openrouter import OpenRouterProvider
+from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -322,12 +323,17 @@ class ArticleSegmentView(APIView):
                     next_context=next_frag.text if next_frag else None,
                     user=request.user,
                 )
+            except ProviderError:
+                raise
             except Exception as e:
-                logger.exception('Segmentation failed for gap %d-%d', gap_start, gap_end)
-                err_str = str(e)
-                if '503' in err_str or 'UNAVAILABLE' in err_str:
-                    return Response({'error': 'LLM 当前负载过高，请等待 1-2 分钟后重试'}, status=503)
-                return Response({'error': f'切割失败：{err_str}'}, status=500)
+                logger.error(
+                    'Segmentation failed for gap %d-%d type=%s',
+                    gap_start, gap_end, type(e).__name__,
+                )
+                return Response(
+                    {'code': 'generation_failed', 'detail': '切割失败，请稍后重试'},
+                    status=500,
+                )
 
             try:
                 validated_results = _validate_segment_results(
@@ -441,8 +447,11 @@ class ArticleConfirmSelectedView(APIView):
                 fragment.is_confirmed = True
                 fragment.save()
                 confirmed_ids.append(str(fragment.id))
-            except Exception:
-                logger.exception('Vectorization failed for fragment %s', fragment.id)
+            except Exception as e:
+                logger.error(
+                    'Vectorization failed for fragment %s type=%s',
+                    fragment.id, type(e).__name__,
+                )
                 error_ids.append(str(fragment.id))
 
         return Response({
@@ -781,16 +790,14 @@ class FragmentInferTagsView(APIView):
         try:
             provider = _get_provider(llm_config)
             tags = infer_tags(fragment.text, provider, language=language, user=request.user)
+        except ProviderError:
+            raise
         except Exception as e:
-            logger.exception('Tag inference failed')
-            err_str = str(e)
-            if '429' in err_str or 'rate_limit_exceeded' in err_str or 'Rate limit' in err_str:
-                return Response({
-                    'error': f'{llm_config.provider.capitalize()} 每日 token 配额已用完，请明天再试或在设置页切换其他 provider'
-                }, status=429)
-            if '503' in err_str or 'UNAVAILABLE' in err_str:
-                return Response({'error': 'LLM 服务暂时不可用，请稍后重试'}, status=503)
-            return Response({'error': f'标签推断失败：{err_str}'}, status=500)
+            logger.error('Tag inference failed type=%s', type(e).__name__)
+            return Response(
+                {'code': 'generation_failed', 'detail': '标签推断失败，请稍后重试'},
+                status=500,
+            )
 
         fragment.tags         = tags
         fragment.is_confirmed = False
@@ -827,7 +834,12 @@ class FragmentConfirmView(APIView):
             fragment.is_confirmed = True
             fragment.save()
         except Exception as e:
-            logger.exception('Fragment vectorization failed')
-            return Response({'error': f'向量化失败：{str(e)}'}, status=500)
+            logger.error(
+                'Fragment vectorization failed type=%s', type(e).__name__,
+            )
+            return Response(
+                {'code': 'embedding_failed', 'detail': '向量化失败，请稍后重试'},
+                status=500,
+            )
 
         return Response(FragmentSerializer(fragment).data)
