@@ -28,6 +28,7 @@ class ProviderError(Exception):
 
     当前错误码：
       provider_key_invalid   — API Key 无效（401）
+      provider_payment_required      — 账户没有可用额度或计费权限（402）
       provider_rate_limit             — 请求频率或额度受限（429）
       provider_model_unavailable      — 当前配置的模型不存在或不可用（404）
       provider_timeout                — provider 超时
