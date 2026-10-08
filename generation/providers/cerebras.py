@@ -79,6 +79,10 @@ class CerebrasProvider(BaseProvider):
                         e.status_code, self.MODEL, attempt + 1,
                     )
                     continue
+                logger.warning(
+                    'Cerebras request failed status=%s model=%s operation=stream',
+                    e.status_code, self.MODEL,
+                )
                 if e.status_code == 404:
                     raise ProviderError(
                         'Cerebras 当前配置的模型不可用',
@@ -160,6 +164,10 @@ class CerebrasProvider(BaseProvider):
                         e.status_code, self.MODEL, attempt + 1,
                     )
                     continue
+                logger.warning(
+                    'Cerebras request failed status=%s model=%s operation=complete',
+                    e.status_code, self.MODEL,
+                )
                 if e.status_code == 404:
                     raise ProviderError(
                         'Cerebras 当前配置的模型不可用',
