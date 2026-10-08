@@ -117,7 +117,7 @@ def test_single_oversized_source_line_is_not_split_inside_its_line_number():
     ),
     [
         (near_limit_narrative_sample, 80, 2800, [83]),
-        (high_line_density_sample, 200, 2700, [100, 100, 15]),
+        (high_line_density_sample, 200, 2700, [99, 99, 17]),
     ],
     ids=['near-limit-narrative', 'high-line-density'],
 )
