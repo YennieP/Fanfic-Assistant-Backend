@@ -202,13 +202,19 @@ def _split_numbered_lines(numbered_text: str, max_chars: int = MAX_CHARS_PER_CHU
     current_len = 0
 
     for line in all_lines:
-        if current_len + len(line) > max_chars and current_lines:
+        # Account for the newline that join() inserts between source lines.
+        # Without it, high-line-count chunks can exceed the advertised limit
+        # by almost one character per line. A single source line may still be
+        # larger than max_chars because splitting inside a numbered line would
+        # break the absolute-line protocol.
+        next_len = current_len + (1 if current_lines else 0) + len(line)
+        if next_len > max_chars and current_lines:
             chunks.append(('\n'.join(current_lines), len(current_lines)))
             current_lines = [line]
             current_len   = len(line)
         else:
             current_lines.append(line)
-            current_len += len(line)
+            current_len = next_len
 
     if current_lines:
         chunks.append(('\n'.join(current_lines), len(current_lines)))

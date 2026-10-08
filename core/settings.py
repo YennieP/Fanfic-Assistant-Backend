@@ -168,6 +168,13 @@ LOGGING = {
         'level': LOG_LEVEL,
     },
     'loggers': {
+        'generation.providers.gemini': {
+            'handlers': ['console'],
+            # Safe capacity telemetry contains only model/status/token counts.
+            # Keep it visible when the application-wide default is WARNING.
+            'level': 'INFO',
+            'propagate': False,
+        },
         'django': {
             'handlers': ['console'],
             # INFO：记录启动信息和请求日志（Railway log panel 可见）

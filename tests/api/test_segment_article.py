@@ -4,9 +4,17 @@ import json
 import pytest
 from django.db import connection
 
-from examples.llm_pipeline import segment_article
+from examples.llm_pipeline import (
+    MAX_CHARS_PER_CHUNK,
+    _split_numbered_lines,
+    segment_article,
+)
 from examples.models import Article, Fragment
 from examples.views import _validate_segment_results
+from tests.capacity_samples import (
+    high_line_density_sample,
+    near_limit_narrative_sample,
+)
 from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
 
@@ -77,6 +85,47 @@ def _result_for(content, global_start):
         'start': global_start,
         'end': global_start + len(lines) - 1,
     }]
+
+
+def test_numbered_chunk_limit_counts_newline_separators_for_many_short_lines():
+    numbered = '\n'.join(f'{index}: x' for index in range(1000))
+
+    chunks = _split_numbered_lines(numbered)
+
+    assert len(chunks) > 1
+    assert sum(line_count for _, line_count in chunks) == 1000
+    assert all(len(chunk) <= MAX_CHARS_PER_CHUNK for chunk, _ in chunks)
+
+
+def test_single_oversized_source_line_is_not_split_inside_its_line_number():
+    numbered = f'120: {"x" * MAX_CHARS_PER_CHUNK}'
+
+    chunks = _split_numbered_lines(numbered)
+
+    assert chunks == [(numbered, 1)]
+
+
+@pytest.mark.parametrize(
+    ('sample_factory', 'minimum_lines', 'minimum_numbered_chars'),
+    [
+        (near_limit_narrative_sample, 80, 2800),
+        (high_line_density_sample, 200, 2700),
+    ],
+    ids=['near-limit-narrative', 'high-line-density'],
+)
+def test_dep003_capacity_samples_each_fit_one_near_limit_chunk(
+    sample_factory, minimum_lines, minimum_numbered_chars,
+):
+    content = sample_factory()
+    numbered = '\n'.join(
+        f'{index}: {line}' for index, line in enumerate(content.splitlines())
+    )
+
+    chunks = _split_numbered_lines(numbered)
+
+    assert len(content.splitlines()) >= minimum_lines
+    assert minimum_numbered_chars <= len(numbered) <= MAX_CHARS_PER_CHUNK
+    assert chunks == [(numbered, len(content.splitlines()))]
 
 
 @pytest.mark.django_db

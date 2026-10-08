@@ -118,11 +118,41 @@ class GeminiProvider(BaseProvider):
                     config=config,
                 )
                 usage = response.usage_metadata
+                candidate = response.candidates[0] if response.candidates else None
+                raw_finish_reason = getattr(candidate, 'finish_reason', None)
+                finish_reason = (
+                    getattr(raw_finish_reason, 'value', None)
+                    or str(raw_finish_reason or 'UNKNOWN')
+                )
+                prompt_tokens = usage.prompt_token_count if usage else 0
+                completion_tokens = usage.candidates_token_count if usage else 0
+                total_tokens = usage.total_token_count if usage else 0
+                prompt_tokens = prompt_tokens or 0
+                completion_tokens = completion_tokens or 0
+                total_tokens = total_tokens or 0
+                unattributed_tokens = max(
+                    0, total_tokens - prompt_tokens - completion_tokens,
+                )
+                # Capacity telemetry only: never log prompts, model output, or
+                # API keys. "unattributed" is intentionally neutral because
+                # google-genai 1.0.0 does not expose a thoughts_token_count.
+                logger.info(
+                    'Gemini complete capacity: model=%s finish_reason=%s '
+                    'prompt_tokens=%d completion_tokens=%d total_tokens=%d '
+                    'unattributed_tokens=%d max_output_tokens=%d',
+                    self.MODEL,
+                    finish_reason,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    unattributed_tokens,
+                    max_tokens,
+                )
                 return CompleteResult(
                     text=response.text,
                     model=self.MODEL,
-                    prompt_tokens=usage.prompt_token_count if usage else 0,
-                    completion_tokens=usage.candidates_token_count if usage else 0,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                 )
             except ClientError as e:
                 if e.code == 401:
