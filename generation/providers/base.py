@@ -63,6 +63,6 @@ class BaseProvider(ABC):
     ) -> CompleteResult:
         """
         非流式一次性调用。
-        max_tokens 可按场景调整：标签推断用默认 2000，文章切割用 4000+。
+        max_tokens 由调用场景显式调整；当前文章切割使用 2000。
         """
         ...
