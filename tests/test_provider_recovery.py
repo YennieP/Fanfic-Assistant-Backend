@@ -198,6 +198,25 @@ def test_cerebras_logs_only_safe_status_metadata(caplog):
     assert VENDOR_MARKER not in caplog.text
 
 
+@pytest.mark.parametrize('method', ['complete', 'stream'])
+def test_cerebras_402_is_safe_payment_required(method):
+    error = _status_error(openai.APIStatusError, 402)
+    provider = _provider_with_client(
+        CerebrasProvider,
+        _chat_client(_FakeCompletions(error=error)),
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        if method == 'complete':
+            provider.complete('system', 'user')
+        else:
+            list(provider.stream('system', 'user'))
+
+    assert exc_info.value.code == 'provider_payment_required'
+    assert exc_info.value.http_status == 402
+    assert VENDOR_MARKER not in str(exc_info.value)
+
+
 def _provider_with_client(provider_type, client):
     provider = object.__new__(provider_type)
     provider.client = client

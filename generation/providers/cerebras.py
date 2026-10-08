@@ -83,6 +83,12 @@ class CerebrasProvider(BaseProvider):
                     'Cerebras request failed status=%s model=%s operation=stream',
                     e.status_code, self.MODEL,
                 )
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'Cerebras 账户当前没有可用额度，请在服务商控制台检查试用额度或计费设置',
+                        code='provider_payment_required',
+                        http_status=402,
+                    ) from None
                 if e.status_code == 404:
                     raise ProviderError(
                         'Cerebras 当前配置的模型不可用',
@@ -168,6 +174,12 @@ class CerebrasProvider(BaseProvider):
                     'Cerebras request failed status=%s model=%s operation=complete',
                     e.status_code, self.MODEL,
                 )
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'Cerebras 账户当前没有可用额度，请在服务商控制台检查试用额度或计费设置',
+                        code='provider_payment_required',
+                        http_status=402,
+                    ) from None
                 if e.status_code == 404:
                     raise ProviderError(
                         'Cerebras 当前配置的模型不可用',
