@@ -191,9 +191,29 @@ def test_segmentation_prompt_matches_the_validator_protocol_for_a_nonzero_gap():
     assert '不要从 0 重新编号' in system_prompt
     assert '"start": 0' not in system_prompt
     assert '本次允许返回的行号范围：120 到 123（均包含）' in user_prompt
+    assert (
+        '{"segments":[{"start":120,"end":123,"type":"story"}]}'
+        in user_prompt
+    )
     assert '120: ' in user_prompt
     assert '121: 正文一' in user_prompt
     assert '123: 正文二' in user_prompt
+
+
+@pytest.mark.django_db
+def test_segmentation_logs_safe_shape_when_provider_output_has_no_segments(caplog):
+    provider = RecordingProvider(complete_text='这不是 JSON')
+
+    with caplog.at_level('WARNING', logger='examples.llm_pipeline'):
+        results = segment_article('正文', provider)
+
+    assert results == []
+    assert (
+        'Segment chunk 0 produced no usable segments: '
+        'response_length=8 parsed_type=dict parsed_keys=[]'
+        in caplog.text
+    )
+    assert '这不是 JSON' not in caplog.text
 
 
 @pytest.mark.django_db(transaction=True)

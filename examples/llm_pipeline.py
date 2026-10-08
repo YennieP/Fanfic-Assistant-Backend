@@ -107,10 +107,20 @@ def segment_article(
                 f'{next_snippet}'
             )
 
+        format_example = json.dumps({
+            'segments': [{
+                'start': chunk_start,
+                'end': chunk_end,
+                'type': 'story',
+            }],
+        }, ensure_ascii=False, separators=(',', ':'))
         _seg_prompt = (
             f'{prefix}'
             f'本次允许返回的行号范围：{chunk_start} 到 {chunk_end}（均包含）。\n'
             '只复制下方每行冒号前的实际行号，不要重新编号。\n'
+            '以下内容只演示合法 JSON 语法和本次可用的行号；'
+            '不要照抄分组，仍须按情节决定片段数量：\n'
+            f'{format_example}\n'
             f'请切割以下文章片段（行号已标注）：\n\n{chunk_text}'
             f'{suffix}'
         )
@@ -129,7 +139,24 @@ def segment_article(
             continue
 
         data = _parse_json(chunk_text_result)
-        for seg in data.get('segments', []):
+        segments = data.get('segments') if isinstance(data, dict) else None
+        if not isinstance(segments, list) or not segments:
+            parsed_keys = (
+                sorted(str(key) for key in data)
+                if isinstance(data, dict)
+                else []
+            )
+            logger.warning(
+                'Segment chunk %d produced no usable segments: '
+                'response_length=%d parsed_type=%s parsed_keys=%s',
+                chunk_idx,
+                len(chunk_text_result),
+                type(data).__name__,
+                parsed_keys,
+            )
+            continue
+
+        for seg in segments:
             abs_start = seg.get('start', 0)
             abs_end   = seg.get('end', abs_start)
             seg_type  = seg.get('type', 'story')
