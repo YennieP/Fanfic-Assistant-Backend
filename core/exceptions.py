@@ -23,7 +23,7 @@ def custom_exception_handler(exc, context):
     """
     DRF 异常处理链：
     1. OperationalError → 503（数据库不可用）
-    2. ProviderError → 400（provider 业务错误，code 透传前端）
+    2. ProviderError → 异常自带安全 HTTP 状态（code 透传前端）
        注意：SSE 路径中 ProviderError 由 views.py 内部捕获，不会到达这里
     3. DRF 内置异常（404/403/ValidationError 等）→ 交给 DRF 原有处理
     4. 其他未预期异常 → 500，记录完整 traceback
@@ -41,7 +41,7 @@ def custom_exception_handler(exc, context):
         logger.warning('ProviderError [%s] in %s: %s', exc.code, _view_name(context), exc)
         return Response(
             {'code': exc.code, 'detail': str(exc)},
-            status=400,
+            status=exc.http_status,
         )
 
     # ── 3. DRF 内置异常（ValidationError / NotAuthenticated / PermissionDenied 等）

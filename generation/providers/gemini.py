@@ -56,27 +56,57 @@ class GeminiProvider(BaseProvider):
                 # 模型返回了空响应，不重试
                 break
             except ClientError as e:
-                # 4xx 错误不重试：401 = Key 无效，其余直接 raise
+                # 4xx 错误不重试，按状态转为安全的业务错误。
                 if e.code == 401:
-                    raise ProviderError('Gemini API Key 无效', code='provider_key_invalid')
-                raise
+                    raise ProviderError(
+                        'Gemini API Key 无效', code='provider_key_invalid'
+                    ) from None
+                if e.code == 429:
+                    raise ProviderError(
+                        'Gemini 请求频率或额度已受限，请稍后重试',
+                        code='provider_rate_limit',
+                        http_status=429,
+                    ) from None
+                if e.code == 404:
+                    raise ProviderError(
+                        'Gemini 当前配置的模型不可用',
+                        code='provider_model_unavailable',
+                        http_status=503,
+                    ) from None
+                raise ProviderError(
+                    'Gemini 请求失败，请稍后重试',
+                    code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 32)
                     logger.warning(
-                        'Gemini %s on attempt %d, retrying in %ds: %s',
-                        e.code, attempt + 1, wait, e,
+                        'Gemini status=%s model=%s attempt=%d; retrying in %ds',
+                        e.code, self.MODEL, attempt + 1, wait,
                     )
                     time.sleep(wait)
                     last_error = e
                     stream_iter = None
                 else:
-                    raise
+                    raise ProviderError(
+                        'Gemini 服务暂时不可用，请稍后重试',
+                        code='provider_temporarily_unavailable',
+                        http_status=503,
+                    ) from None
         else:
             # 7 次重试全部失败
             if last_error and getattr(last_error, 'code', None) == 429:
-                raise ProviderError('Gemini 免费额度暂时耗尽，请稍后再试', code='provider_quota_daily')
-            raise ProviderError('Gemini 服务暂时不可用，请稍后再试', code='generation_failed')
+                raise ProviderError(
+                    'Gemini 请求频率或额度已受限，请稍后重试',
+                    code='provider_rate_limit',
+                    http_status=429,
+                ) from None
+            raise ProviderError(
+                'Gemini 服务暂时不可用，请稍后再试',
+                code='provider_temporarily_unavailable',
+                http_status=503,
+            ) from None
 
         if stream_iter is None:
             # 7 次重试全部失败（last_error 已在上方 raise，此处不可达）
@@ -156,20 +186,50 @@ class GeminiProvider(BaseProvider):
                 )
             except ClientError as e:
                 if e.code == 401:
-                    raise ProviderError('Gemini API Key 无效', code='provider_key_invalid')
-                raise
+                    raise ProviderError(
+                        'Gemini API Key 无效', code='provider_key_invalid'
+                    ) from None
+                if e.code == 429:
+                    raise ProviderError(
+                        'Gemini 请求频率或额度已受限，请稍后重试',
+                        code='provider_rate_limit',
+                        http_status=429,
+                    ) from None
+                if e.code == 404:
+                    raise ProviderError(
+                        'Gemini 当前配置的模型不可用',
+                        code='provider_model_unavailable',
+                        http_status=503,
+                    ) from None
+                raise ProviderError(
+                    'Gemini 请求失败，请稍后重试',
+                    code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 4)
                     logger.warning(
-                        'Gemini %s on attempt %d, retrying in %ds: %s',
-                        e.code, attempt + 1, wait, e,
+                        'Gemini status=%s model=%s attempt=%d; retrying in %ds',
+                        e.code, self.MODEL, attempt + 1, wait,
                     )
                     time.sleep(wait)
                     last_error = e
                 else:
-                    raise
+                    raise ProviderError(
+                        'Gemini 服务暂时不可用，请稍后重试',
+                        code='provider_temporarily_unavailable',
+                        http_status=503,
+                    ) from None
 
         if last_error and getattr(last_error, 'code', None) == 429:
-            raise ProviderError('Gemini 免费额度暂时耗尽，请稍后再试', code='provider_quota_daily')
-        raise ProviderError('Gemini 服务暂时不可用，请稍后再试', code='generation_failed')
+            raise ProviderError(
+                'Gemini 请求频率或额度已受限，请稍后重试',
+                code='provider_rate_limit',
+                http_status=429,
+            ) from None
+        raise ProviderError(
+            'Gemini 服务暂时不可用，请稍后再试',
+            code='provider_temporarily_unavailable',
+            http_status=503,
+        ) from None

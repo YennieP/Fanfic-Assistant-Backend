@@ -20,6 +20,7 @@ from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.openrouter import OpenRouterProvider
+from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -421,9 +422,17 @@ class SuggestCompletionsView(APIView):
                 user_prompt=user_prompt,
                 max_tokens=2000,
             )
+        except ProviderError:
+            raise
         except Exception as e:
-            logger.exception('suggest_completions LLM call failed')
-            return Response({'error': str(e)}, status=500)
+            logger.error(
+                'suggest_completions LLM call failed type=%s',
+                type(e).__name__,
+            )
+            return Response(
+                {'code': 'generation_failed', 'detail': '角色建议调用失败，请稍后重试'},
+                status=500,
+            )
 
         if not result.text:
             return Response({'error': '推断返回为空，请重试'}, status=500)
