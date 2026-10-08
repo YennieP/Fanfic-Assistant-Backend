@@ -181,6 +181,23 @@ def test_openai_compatible_404_is_safe_model_unavailable(
     assert VENDOR_MARKER not in str(exc_info.value)
 
 
+def test_cerebras_logs_only_safe_status_metadata(caplog):
+    error = _status_error(openai.APIStatusError, 422)
+    provider = _provider_with_client(
+        CerebrasProvider,
+        _chat_client(_FakeCompletions(error=error)),
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        provider.complete('system', 'user')
+
+    assert exc_info.value.code == 'provider_temporarily_unavailable'
+    assert 'status=422' in caplog.text
+    assert 'model=gpt-oss-120b' in caplog.text
+    assert 'operation=complete' in caplog.text
+    assert VENDOR_MARKER not in caplog.text
+
+
 def _provider_with_client(provider_type, client):
     provider = object.__new__(provider_type)
     provider.client = client
