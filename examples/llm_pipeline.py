@@ -22,6 +22,7 @@ from core.taxonomy import TAXONOMY, TAXONOMY_EN
 logger = logging.getLogger(__name__)
 
 MAX_CHARS_PER_CHUNK = 3000
+MAX_LINES_PER_CHUNK = 100
 SEGMENTATION_MAX_OUTPUT_TOKENS = 4000
 
 # 上下文截取行数：只取前置片段的最后 N 行 / 后置片段的最前 N 行
@@ -196,20 +197,25 @@ def _tail_lines(text: str, n: int) -> str:
     return '\n'.join(text.splitlines()[-n:])
 
 
-def _split_numbered_lines(numbered_text: str, max_chars: int = MAX_CHARS_PER_CHUNK) -> list[tuple[str, int]]:
+def _split_numbered_lines(
+    numbered_text: str,
+    max_chars: int = MAX_CHARS_PER_CHUNK,
+    max_lines: int = MAX_LINES_PER_CHUNK,
+) -> list[tuple[str, int]]:
     all_lines = numbered_text.split('\n')
     chunks: list[tuple[str, int]] = []
     current_lines: list[str] = []
     current_len = 0
 
     for line in all_lines:
-        # Account for the newline that join() inserts between source lines.
-        # Without it, high-line-count chunks can exceed the advertised limit
-        # by almost one character per line. A single source line may still be
-        # larger than max_chars because splitting inside a numbered line would
-        # break the absolute-line protocol.
+        # Account for the newline that join() inserts between source lines and
+        # cap line count so short-line inputs cannot demand an unbounded JSON
+        # segment list. A single source line may still be larger than max_chars
+        # because splitting inside it would break the absolute-line protocol.
         next_len = current_len + (1 if current_lines else 0) + len(line)
-        if next_len > max_chars and current_lines:
+        exceeds_chars = next_len > max_chars
+        exceeds_lines = len(current_lines) >= max_lines
+        if current_lines and (exceeds_chars or exceeds_lines):
             chunks.append(('\n'.join(current_lines), len(current_lines)))
             current_lines = [line]
             current_len   = len(line)

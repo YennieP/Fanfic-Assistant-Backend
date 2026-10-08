@@ -97,7 +97,7 @@ Windows：
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。
-- 文章自动切割要求 provider 复制输入中标注的绝对行号，`start` / `end` 均为 inclusive；每个非空行必须恰好覆盖一次，空白行可以并入相邻片段或省略，但纯空白片段、重叠和越出当前 gap 的范围均会被拒绝。编号后文本按包含换行符的 3000 字符上限分块；单个超长原文行不会从行内拆开，以免破坏绝对行号协议。当前不猜测性修正 EOF 多一行等越界结果。
+- 文章自动切割要求 provider 复制输入中标注的绝对行号，`start` / `end` 均为 inclusive；每个非空行必须恰好覆盖一次，空白行可以并入相邻片段或省略，但纯空白片段、重叠和越出当前 gap 的范围均会被拒绝。编号后文本按包含换行符的 3000 字符或 100 行上限分块，以先达到者为准；单个超长原文行不会从行内拆开，以免破坏绝对行号协议。当前不猜测性修正 EOF 多一行等越界结果。
 - 文章自动切割当前使用 4000 输出 token 上限；生产容量验收确认 2000 会在接近 chunk 上限的高行密度输入上耗尽并截断 JSON。该值是调用上限，不代表每次固定消耗 4000 token。
 - Gemini 同步调用会向应用控制台日志记录容量指标（model、finish reason、prompt/completion/total/unattributed token 和输出预算），不记录 prompt、模型正文或 API Key；`unattributed` 只表示 SDK 未分类的 token，不直接等同于 thinking token。
 - `confirm-selected` 只处理请求中显式列出的、属于当前文章且包含可向量化有效标签的片段 ID；若任一片段没有有效标签，会在调用 embedding 前拒绝整批请求。旧 `confirm-all` 已在前端切换完成后退役，避免绕过显式范围约束。
