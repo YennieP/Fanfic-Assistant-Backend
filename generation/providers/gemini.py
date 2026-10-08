@@ -102,6 +102,11 @@ class GeminiProvider(BaseProvider):
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             max_output_tokens=max_tokens,
+            # Every synchronous completion call site currently expects a JSON
+            # object (segmentation, tagging, suggestions, translation, judge).
+            # Ask Gemini to enforce JSON syntax instead of relying on prompt
+            # wording alone.
+            response_mime_type='application/json',
         )
 
         last_error = None
