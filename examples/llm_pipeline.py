@@ -130,7 +130,10 @@ def segment_article(
             return provider.complete(
                 system_prompt=SEGMENTATION_SYSTEM_PROMPT,
                 user_prompt=_seg_prompt,
-                max_tokens=800,
+                # Gemini 2.5 may spend part of this budget on internal
+                # reasoning. 800 tokens produced truncated JSON in the
+                # production ARC-008 smoke test even for an 11-line article.
+                max_tokens=2000,
             )
 
         chunk_text_result = _call_segment(user=user, generation_id=uuid.uuid4())
@@ -148,11 +151,15 @@ def segment_article(
             )
             logger.warning(
                 'Segment chunk %d produced no usable segments: '
-                'response_length=%d parsed_type=%s parsed_keys=%s',
+                'response_length=%d parsed_type=%s parsed_keys=%s '
+                'object_balance=%d array_balance=%d contains_segments_key=%s',
                 chunk_idx,
                 len(chunk_text_result),
                 type(data).__name__,
                 parsed_keys,
+                chunk_text_result.count('{') - chunk_text_result.count('}'),
+                chunk_text_result.count('[') - chunk_text_result.count(']'),
+                'segments' in chunk_text_result,
             )
             continue
 

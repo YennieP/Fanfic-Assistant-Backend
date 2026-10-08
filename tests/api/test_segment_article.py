@@ -185,6 +185,7 @@ def test_segmentation_prompt_matches_the_validator_protocol_for_a_nonzero_gap():
     call = provider.calls[0]
     system_prompt = call['system_prompt']
     user_prompt = call['user_prompt']
+    assert call['max_tokens'] == 2000
     assert '每个非空行必须恰好属于一个片段' in system_prompt
     assert '空白行可以并入相邻片段，也可以不分配' in system_prompt
     assert '不得为纯空白行单独创建片段' in system_prompt
@@ -210,7 +211,8 @@ def test_segmentation_logs_safe_shape_when_provider_output_has_no_segments(caplo
     assert results == []
     assert (
         'Segment chunk 0 produced no usable segments: '
-        'response_length=8 parsed_type=dict parsed_keys=[]'
+        'response_length=8 parsed_type=dict parsed_keys=[] '
+        'object_balance=0 array_balance=0 contains_segments_key=False'
         in caplog.text
     )
     assert '这不是 JSON' not in caplog.text
