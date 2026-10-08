@@ -6,6 +6,7 @@ from django.db import connection
 
 from examples.llm_pipeline import (
     MAX_CHARS_PER_CHUNK,
+    MAX_LINES_PER_CHUNK,
     SEGMENTATION_MAX_OUTPUT_TOKENS,
     _split_numbered_lines,
     segment_article,
@@ -96,6 +97,7 @@ def test_numbered_chunk_limit_counts_newline_separators_for_many_short_lines():
     assert len(chunks) > 1
     assert sum(line_count for _, line_count in chunks) == 1000
     assert all(len(chunk) <= MAX_CHARS_PER_CHUNK for chunk, _ in chunks)
+    assert all(line_count <= MAX_LINES_PER_CHUNK for _, line_count in chunks)
 
 
 def test_single_oversized_source_line_is_not_split_inside_its_line_number():
@@ -107,15 +109,23 @@ def test_single_oversized_source_line_is_not_split_inside_its_line_number():
 
 
 @pytest.mark.parametrize(
-    ('sample_factory', 'minimum_lines', 'minimum_numbered_chars'),
+    (
+        'sample_factory',
+        'minimum_lines',
+        'minimum_numbered_chars',
+        'expected_chunk_line_counts',
+    ),
     [
-        (near_limit_narrative_sample, 80, 2800),
-        (high_line_density_sample, 200, 2700),
+        (near_limit_narrative_sample, 80, 2800, [83]),
+        (high_line_density_sample, 200, 2700, [100, 100, 15]),
     ],
     ids=['near-limit-narrative', 'high-line-density'],
 )
-def test_dep003_capacity_samples_each_fit_one_near_limit_chunk(
-    sample_factory, minimum_lines, minimum_numbered_chars,
+def test_dep003_capacity_samples_respect_character_and_line_limits(
+    sample_factory,
+    minimum_lines,
+    minimum_numbered_chars,
+    expected_chunk_line_counts,
 ):
     content = sample_factory()
     numbered = '\n'.join(
@@ -126,7 +136,12 @@ def test_dep003_capacity_samples_each_fit_one_near_limit_chunk(
 
     assert len(content.splitlines()) >= minimum_lines
     assert minimum_numbered_chars <= len(numbered) <= MAX_CHARS_PER_CHUNK
-    assert chunks == [(numbered, len(content.splitlines()))]
+    assert [line_count for _, line_count in chunks] == expected_chunk_line_counts
+    assert sum(line_count for _, line_count in chunks) == len(content.splitlines())
+    assert all(len(chunk) <= MAX_CHARS_PER_CHUNK for chunk, _ in chunks)
+    assert all(line_count <= MAX_LINES_PER_CHUNK for _, line_count in chunks)
+    if len(expected_chunk_line_counts) == 1:
+        assert chunks == [(numbered, len(content.splitlines()))]
 
 
 @pytest.mark.django_db
