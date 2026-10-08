@@ -22,6 +22,7 @@ from core.taxonomy import TAXONOMY, TAXONOMY_EN
 logger = logging.getLogger(__name__)
 
 MAX_CHARS_PER_CHUNK = 3000
+SEGMENTATION_MAX_OUTPUT_TOKENS = 4000
 
 # 上下文截取行数：只取前置片段的最后 N 行 / 后置片段的最前 N 行
 # 聚焦在边界附近，减少 token 消耗和 LLM 干扰
@@ -131,9 +132,9 @@ def segment_article(
                 system_prompt=SEGMENTATION_SYSTEM_PROMPT,
                 user_prompt=_seg_prompt,
                 # Gemini 2.5 may spend part of this budget on internal
-                # reasoning. 800 tokens produced truncated JSON in the
-                # production ARC-008 smoke test even for an 11-line article.
-                max_tokens=2000,
+                # reasoning. Production capacity checks exhausted 2000 tokens
+                # on a 2763-character, 215-line chunk before JSON completed.
+                max_tokens=SEGMENTATION_MAX_OUTPUT_TOKENS,
             )
 
         chunk_text_result = _call_segment(user=user, generation_id=uuid.uuid4())

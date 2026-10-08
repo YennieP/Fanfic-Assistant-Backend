@@ -6,6 +6,7 @@ from django.db import connection
 
 from examples.llm_pipeline import (
     MAX_CHARS_PER_CHUNK,
+    SEGMENTATION_MAX_OUTPUT_TOKENS,
     _split_numbered_lines,
     segment_article,
 )
@@ -234,7 +235,8 @@ def test_segmentation_prompt_matches_the_validator_protocol_for_a_nonzero_gap():
     call = provider.calls[0]
     system_prompt = call['system_prompt']
     user_prompt = call['user_prompt']
-    assert call['max_tokens'] == 2000
+    assert SEGMENTATION_MAX_OUTPUT_TOKENS == 4000
+    assert call['max_tokens'] == SEGMENTATION_MAX_OUTPUT_TOKENS
     assert '每个非空行必须恰好属于一个片段' in system_prompt
     assert '空白行可以并入相邻片段，也可以不分配' in system_prompt
     assert '不得为纯空白行单独创建片段' in system_prompt
