@@ -28,4 +28,3 @@ def test_llm_log_decorator_preserves_complete_result(db):
 
     assert isinstance(result, CompleteResult)
     assert result.text == '{"ok":true}'
-
