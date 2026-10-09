@@ -4,7 +4,13 @@ import requests
 from google import genai
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
-from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .base import (
+    BaseProvider,
+    CompleteResult,
+    CompletionOptions,
+    ProviderError,
+    UsageInfo,
+)
 from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
@@ -182,18 +188,20 @@ class GeminiProvider(BaseProvider):
         )
 
     def complete(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        options: CompletionOptions,
     ) -> CompleteResult:
         client = genai.Client(api_key=self.api_key)
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=max_tokens,
-            # Every synchronous completion call site currently expects a JSON
-            # object (segmentation, tagging, suggestions, translation, judge).
-            # Ask Gemini to enforce JSON syntax instead of relying on prompt
-            # wording alone.
-            response_mime_type='application/json',
-        )
+        config_kwargs = {
+            'system_instruction': system_prompt,
+            'max_output_tokens': options.max_tokens,
+        }
+        if options.response_format == 'json':
+            config_kwargs['response_mime_type'] = 'application/json'
+        config = types.GenerateContentConfig(**config_kwargs)
 
         last_error = None
         for attempt in range(5):
@@ -232,7 +240,7 @@ class GeminiProvider(BaseProvider):
                     completion_tokens,
                     total_tokens,
                     unattributed_tokens,
-                    max_tokens,
+                    options.max_tokens,
                 )
                 return CompleteResult(
                     text=response.text,

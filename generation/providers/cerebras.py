@@ -4,11 +4,16 @@ OpenAI SDK 兼容
 API Key 申请：https://cloud.cerebras.ai/
 """
 import logging
-import httpx
-from openai import OpenAI
 import openai
-from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .base import (
+    BaseProvider,
+    CompleteResult,
+    CompletionOptions,
+    ProviderError,
+    UsageInfo,
+)
 from .catalog import get_provider_definition
+from .openai_compatible import complete_chat, create_client, stream_chat
 
 logger = logging.getLogger(__name__)
 
@@ -19,43 +24,30 @@ class CerebrasProvider(BaseProvider):
     MODEL = get_provider_definition('cerebras').model
 
     def __init__(self, api_key: str):
-        self.client = OpenAI(
+        self.client = create_client(
             api_key=api_key,
             base_url='https://api.cerebras.ai/v1',
-            # stream() 中途卡住时防止 gunicorn sync worker 因无法发送心跳而被 SIGKILL
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
         )
 
     def stream(self, system_prompt: str, user_prompt: str):
         for attempt in range(2):
             started = False
-            prompt_tokens = 0
-            completion_tokens = 0
             try:
-                response = self.client.chat.completions.create(
+                response = stream_chat(
+                    self.client,
                     model=self.MODEL,
-                    messages=[
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
                     max_tokens=4000,
                     reasoning_effort='low',
-                    stream=True,
-                    stream_options={'include_usage': True},
+                    include_usage=True,
                 )
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
+                for item in response:
+                    if isinstance(item, UsageInfo):
+                        yield item
+                    else:
                         started = True
-                        yield chunk.choices[0].delta.content
-                    if chunk.usage:
-                        prompt_tokens = chunk.usage.prompt_tokens or 0
-                        completion_tokens = chunk.usage.completion_tokens or 0
-
-                yield UsageInfo(
-                    model=self.MODEL,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                )
+                        yield item
                 return
 
             except openai.AuthenticationError:
@@ -126,27 +118,21 @@ class CerebrasProvider(BaseProvider):
                 ) from None
 
     def complete(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 1000,
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        options: CompletionOptions,
     ) -> CompleteResult:
         for attempt in range(2):
             try:
-                response = self.client.chat.completions.create(
+                return complete_chat(
+                    self.client,
                     model=self.MODEL,
-                    messages=[
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
-                    max_tokens=max_tokens,
-                    reasoning_effort='low',
-                    response_format={'type': 'json_object'},
-                )
-                text = response.choices[0].message.content or ''
-                usage = response.usage
-                return CompleteResult(
-                    text=text,
-                    model=self.MODEL,
-                    prompt_tokens=usage.prompt_tokens if usage else 0,
-                    completion_tokens=usage.completion_tokens if usage else 0,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    options=options,
+                    supports_reasoning_effort=True,
                 )
 
             except openai.AuthenticationError:
