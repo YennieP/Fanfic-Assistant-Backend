@@ -1,6 +1,12 @@
 import logging
 import groq as groq_sdk
-from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .base import (
+    BaseProvider,
+    CompleteResult,
+    CompletionOptions,
+    ProviderError,
+    UsageInfo,
+)
 from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
@@ -109,21 +115,30 @@ class GroqProvider(BaseProvider):
                 ) from None
 
     def complete(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        options: CompletionOptions,
     ) -> CompleteResult:
         client = groq_sdk.Groq(api_key=self.api_key)
 
         for attempt in range(2):
             try:
-                response = client.chat.completions.create(
-                    model=self.MODEL,
-                    messages=[
+                request = {
+                    'model': self.MODEL,
+                    'messages': [
                         {'role': 'system', 'content': system_prompt},
                         {'role': 'user', 'content': user_prompt},
                     ],
-                    max_tokens=max_tokens,
-                    reasoning_effort='low',
-                    response_format={'type': 'json_object'},
+                    'max_tokens': options.max_tokens,
+                }
+                if options.reasoning_effort is not None:
+                    request['reasoning_effort'] = options.reasoning_effort
+                if options.response_format == 'json':
+                    request['response_format'] = {'type': 'json_object'}
+                response = client.chat.completions.create(
+                    **request,
                 )
                 usage = response.usage
                 return CompleteResult(

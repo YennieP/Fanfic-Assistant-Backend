@@ -11,7 +11,7 @@ from characters.models import BaseCard, AUMod, Relationship, RelationshipMembers
 from logs.models import LlmCallLog
 from logs.decorators import log_llm_call
 from generation.provider_service import resolve_active_provider
-from generation.providers.base import ProviderError
+from generation.providers.base import CompletionOptions, ProviderError
 from .models import ConsistencyScore
 from .prompt import build_judge_prompt
 
@@ -130,10 +130,20 @@ class EvaluateView(APIView):
 
         @log_llm_call(feature='consistency_check', sync=True)
         def _call_judge(user=None, generation_id=None):
-            return provider.complete(system_prompt, user_prompt)
+            return provider.complete(
+                system_prompt,
+                user_prompt,
+                options=CompletionOptions(
+                    response_format='json',
+                    reasoning_effort='low',
+                ),
+            )
 
         try:
-            result_text = _call_judge(user=request.user, generation_id=judge_id)
+            result_text = _call_judge(
+                user=request.user,
+                generation_id=judge_id,
+            ).text
         except ProviderError:
             raise
         except Exception as e:

@@ -9,7 +9,7 @@ import requests
 from google.genai.errors import ClientError, ServerError
 
 from generation.providers.anthropic import AnthropicProvider
-from generation.providers.base import ProviderError
+from generation.providers.base import CompletionOptions, ProviderError
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
@@ -24,6 +24,10 @@ PROVIDER_TYPES = {
     'cerebras': CerebrasProvider,
     'openrouter': OpenRouterProvider,
 }
+JSON_OPTIONS = CompletionOptions(
+    response_format='json',
+    reasoning_effort='low',
+)
 
 
 def _retryable_status(provider_name):
@@ -197,7 +201,7 @@ def test_complete_http_error_matrix_is_safe(
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == expected_code
     assert exc_info.value.http_status == expected_http_status
@@ -231,7 +235,7 @@ def test_complete_transport_error_matrix_is_safe(
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == expected_code
     assert exc_info.value.http_status == 503
@@ -252,7 +256,7 @@ def test_complete_retries_provider_specific_5xx(
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_temporarily_unavailable'
     assert exc_info.value.http_status == 503

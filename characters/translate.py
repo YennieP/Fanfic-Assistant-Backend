@@ -9,6 +9,7 @@ GET /api/characters/{canonical_id}/versions/
 """
 import json
 import re
+import uuid
 import logging
 
 from rest_framework.views import APIView
@@ -16,7 +17,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from generation.provider_service import resolve_active_provider
-from generation.providers.base import ProviderError
+from generation.providers.base import CompletionOptions, ProviderError
+from logs.decorators import log_llm_call
 from .models import BaseCard
 
 logger = logging.getLogger(__name__)
@@ -177,11 +179,22 @@ class TranslateView(APIView):
             f'{json.dumps(to_translate, ensure_ascii=False, indent=2)}'
         )
 
-        try:
-            result = provider.complete(
+        @log_llm_call(feature='character_translate', sync=True)
+        def _call_translate(user=None, generation_id=None):
+            return provider.complete(
                 system_prompt=system,
                 user_prompt=user_prompt,
-                max_tokens=3000,
+                options=CompletionOptions(
+                    response_format='json',
+                    max_tokens=3000,
+                    reasoning_effort='low',
+                ),
+            )
+
+        try:
+            result = _call_translate(
+                user=request.user,
+                generation_id=uuid.uuid4(),
             )
         except ProviderError:
             raise
