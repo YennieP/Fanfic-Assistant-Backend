@@ -1,27 +1,89 @@
 import time
 import logging
+import requests
 from google import genai
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
 
 _RETRY_CODES = {503, 429}
 
 
+def _client_error(error: ClientError) -> ProviderError:
+    if error.code == 401:
+        return ProviderError(
+            'Gemini API Key 无效', code='provider_key_invalid',
+        )
+    if error.code == 402:
+        return ProviderError(
+            'Gemini 账户当前没有可用额度',
+            code='provider_payment_required',
+            http_status=402,
+        )
+    if error.code == 429:
+        return ProviderError(
+            'Gemini 请求频率或额度已受限，请稍后重试',
+            code='provider_rate_limit',
+            http_status=429,
+        )
+    if error.code == 404:
+        return ProviderError(
+            'Gemini 当前配置的模型不可用',
+            code='provider_model_unavailable',
+            http_status=503,
+        )
+    return ProviderError(
+        'Gemini 请求失败，请稍后重试',
+        code='provider_temporarily_unavailable',
+        http_status=503,
+    )
+
+
+def _server_error(error: ServerError) -> ProviderError:
+    if error.code == 429:
+        return ProviderError(
+            'Gemini 请求频率或额度已受限，请稍后重试',
+            code='provider_rate_limit',
+            http_status=429,
+        )
+    return ProviderError(
+        'Gemini 服务暂时不可用，请稍后重试',
+        code='provider_temporarily_unavailable',
+        http_status=503,
+    )
+
+
+def _transport_error(error: Exception) -> ProviderError:
+    if isinstance(error, requests.Timeout):
+        return ProviderError(
+            'Gemini 响应超时，请稍后重试',
+            code='provider_timeout',
+            http_status=503,
+        )
+    return ProviderError(
+        'Gemini 连接失败，请稍后重试',
+        code='provider_connection_failed',
+        http_status=503,
+    )
+
+
 class GeminiProvider(BaseProvider):
-    MODEL = 'gemini-2.5-flash'
-    supports_video = True
-    supports_embedding = True
+    _DEFINITION = get_provider_definition('gemini')
+    MODEL = _DEFINITION.model
+    supports_video = _DEFINITION.supports_video
+    supports_embedding = _DEFINITION.supports_embedding
 
     def stream(self, system_prompt: str, user_prompt: str):
         """
         真实 streaming 实现，重试策略限定于「建立连接 + 收到第一个 chunk」阶段。
 
         设计取舍：
-        - 一旦开始 yield chunk，不再捕获 ServerError——因为此时前端已收到部分文字，
-          重试会导致内容重复。流式传输中途断流由 views.py 的 except 处理为 SSE error 事件。
+        - 一旦开始 yield chunk，不再重试——因为此时前端已收到部分文字，
+          重试会导致内容重复。中途断流只归一化为安全 ProviderError，
+          再由 views.py 转换为 SSE error 事件。
         - 实践中 503/429 几乎只发生在请求建立阶段，流式中途断流概率极低。
         - 与原缓冲方案（7 次全程重试）的差异：仅在建立连接阶段重试，UX 显著改善
           （用户 1-2 秒内看到第一个字），接受中途断流时无法续传的代价。
@@ -57,27 +119,7 @@ class GeminiProvider(BaseProvider):
                 break
             except ClientError as e:
                 # 4xx 错误不重试，按状态转为安全的业务错误。
-                if e.code == 401:
-                    raise ProviderError(
-                        'Gemini API Key 无效', code='provider_key_invalid'
-                    ) from None
-                if e.code == 429:
-                    raise ProviderError(
-                        'Gemini 请求频率或额度已受限，请稍后重试',
-                        code='provider_rate_limit',
-                        http_status=429,
-                    ) from None
-                if e.code == 404:
-                    raise ProviderError(
-                        'Gemini 当前配置的模型不可用',
-                        code='provider_model_unavailable',
-                        http_status=503,
-                    ) from None
-                raise ProviderError(
-                    'Gemini 请求失败，请稍后重试',
-                    code='provider_temporarily_unavailable',
-                    http_status=503,
-                ) from None
+                raise _client_error(e) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 32)
@@ -89,11 +131,16 @@ class GeminiProvider(BaseProvider):
                     last_error = e
                     stream_iter = None
                 else:
-                    raise ProviderError(
-                        'Gemini 服务暂时不可用，请稍后重试',
-                        code='provider_temporarily_unavailable',
-                        http_status=503,
-                    ) from None
+                    raise _server_error(e) from None
+            except (requests.Timeout, requests.ConnectionError) as e:
+                wait = min(2 ** attempt, 32)
+                logger.warning(
+                    'Gemini transport=%s model=%s attempt=%d; retrying in %ds',
+                    type(e).__name__, self.MODEL, attempt + 1, wait,
+                )
+                time.sleep(wait)
+                last_error = e
+                stream_iter = None
         else:
             # 7 次重试全部失败
             if last_error and getattr(last_error, 'code', None) == 429:
@@ -102,6 +149,8 @@ class GeminiProvider(BaseProvider):
                     code='provider_rate_limit',
                     http_status=429,
                 ) from None
+            if isinstance(last_error, (requests.Timeout, requests.ConnectionError)):
+                raise _transport_error(last_error) from None
             raise ProviderError(
                 'Gemini 服务暂时不可用，请稍后再试',
                 code='provider_temporarily_unavailable',
@@ -113,11 +162,18 @@ class GeminiProvider(BaseProvider):
             return
 
         # ── 阶段二：消费剩余 chunk，不再重试 ────────────────────────────────
-        for chunk in stream_iter:
-            if chunk.text:
-                yield chunk.text
-            if chunk.usage_metadata and chunk.usage_metadata.candidates_token_count:
-                usage = chunk.usage_metadata
+        try:
+            for chunk in stream_iter:
+                if chunk.text:
+                    yield chunk.text
+                if chunk.usage_metadata and chunk.usage_metadata.candidates_token_count:
+                    usage = chunk.usage_metadata
+        except ClientError as e:
+            raise _client_error(e) from None
+        except ServerError as e:
+            raise _server_error(e) from None
+        except (requests.Timeout, requests.ConnectionError) as e:
+            raise _transport_error(e) from None
 
         yield UsageInfo(
             model=self.MODEL,
@@ -185,27 +241,7 @@ class GeminiProvider(BaseProvider):
                     completion_tokens=completion_tokens,
                 )
             except ClientError as e:
-                if e.code == 401:
-                    raise ProviderError(
-                        'Gemini API Key 无效', code='provider_key_invalid'
-                    ) from None
-                if e.code == 429:
-                    raise ProviderError(
-                        'Gemini 请求频率或额度已受限，请稍后重试',
-                        code='provider_rate_limit',
-                        http_status=429,
-                    ) from None
-                if e.code == 404:
-                    raise ProviderError(
-                        'Gemini 当前配置的模型不可用',
-                        code='provider_model_unavailable',
-                        http_status=503,
-                    ) from None
-                raise ProviderError(
-                    'Gemini 请求失败，请稍后重试',
-                    code='provider_temporarily_unavailable',
-                    http_status=503,
-                ) from None
+                raise _client_error(e) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
                     wait = min(2 ** attempt, 4)
@@ -216,11 +252,15 @@ class GeminiProvider(BaseProvider):
                     time.sleep(wait)
                     last_error = e
                 else:
-                    raise ProviderError(
-                        'Gemini 服务暂时不可用，请稍后重试',
-                        code='provider_temporarily_unavailable',
-                        http_status=503,
-                    ) from None
+                    raise _server_error(e) from None
+            except (requests.Timeout, requests.ConnectionError) as e:
+                wait = min(2 ** attempt, 4)
+                logger.warning(
+                    'Gemini transport=%s model=%s attempt=%d; retrying in %ds',
+                    type(e).__name__, self.MODEL, attempt + 1, wait,
+                )
+                time.sleep(wait)
+                last_error = e
 
         if last_error and getattr(last_error, 'code', None) == 429:
             raise ProviderError(
@@ -228,6 +268,8 @@ class GeminiProvider(BaseProvider):
                 code='provider_rate_limit',
                 http_status=429,
             ) from None
+        if isinstance(last_error, (requests.Timeout, requests.ConnectionError)):
+            raise _transport_error(last_error) from None
         raise ProviderError(
             'Gemini 服务暂时不可用，请稍后再试',
             code='provider_temporarily_unavailable',

@@ -1,5 +1,6 @@
 """一致性评估 API 的关系上下文契约测试。"""
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,7 +56,13 @@ def test_evaluation_injects_owned_relationship_context(
     api_client, make_user_with_key, user_factory, monkeypatch,
 ):
     provider = CapturingProvider()
-    monkeypatch.setattr('evaluation.views._get_provider', lambda _config, _user: provider)
+    monkeypatch.setattr(
+        'evaluation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            instance=provider,
+            definition=SimpleNamespace(model='fake'),
+        ),
+    )
 
     user = make_user_with_key(provider='gemini')
     character = BaseCardFactory(owner=user, name='陈默')
@@ -110,7 +117,13 @@ def test_evaluation_without_relationship_ids_keeps_relationship_section_absent(
     api_client, make_user_with_key, monkeypatch,
 ):
     provider = CapturingProvider()
-    monkeypatch.setattr('evaluation.views._get_provider', lambda _config, _user: provider)
+    monkeypatch.setattr(
+        'evaluation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            instance=provider,
+            definition=SimpleNamespace(model='fake'),
+        ),
+    )
 
     user = make_user_with_key(provider='gemini')
     character = BaseCardFactory(owner=user, name='陈默')

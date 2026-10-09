@@ -1,8 +1,9 @@
 from django.db import models
 from django.contrib.auth.models import User
+from generation.providers.catalog import provider_names
 
 
-SUPPORTED_PROVIDERS = ['anthropic', 'gemini', 'groq', 'cerebras', 'openrouter']
+SUPPORTED_PROVIDERS = provider_names()
 
 
 class UserProviderKey(models.Model):

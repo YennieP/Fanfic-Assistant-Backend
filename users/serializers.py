@@ -1,18 +1,15 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
+from generation.providers.catalog import PROVIDER_CATALOG
 from .models import UserLLMConfig, UserProviderKey, SUPPORTED_PROVIDERS
 
 
-# Scaffold: 每个 provider 的静态能力声明
-# 与 generation/providers/base.py 中的 supports_video / supports_embedding 保持一致
-# 前端据此动态显示/隐藏视频提取、embedding 相关入口，不再 hardcode provider 名称判断
-_PROVIDER_CAPABILITIES = {
-    'anthropic': {'video': False, 'embedding': False},
-    'gemini':    {'video': True,  'embedding': True},
-    'groq':      {'video': False, 'embedding': False},
-    'cerebras':  {'video': False, 'embedding': False},
-    'openrouter':{'video': False, 'embedding': False},
-}
+def _provider_capabilities(provider_name):
+    definition = PROVIDER_CATALOG[provider_name]
+    return {
+        'video': definition.supports_video,
+        'embedding': definition.supports_embedding,
+    }
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -63,9 +60,7 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         return {
             p: {
                 'has_key': p in existing,
-                'capabilities': _PROVIDER_CAPABILITIES.get(
-                    p, {'video': False, 'embedding': False}
-                ),
+                'capabilities': _provider_capabilities(p),
             }
             for p in SUPPORTED_PROVIDERS
         }

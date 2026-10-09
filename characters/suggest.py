@@ -13,13 +13,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from users.encryption import decrypt_key
-from users.models import UserProviderKey
-from generation.providers.anthropic import AnthropicProvider
-from generation.providers.gemini import GeminiProvider
-from generation.providers.groq import GroqProvider
-from generation.providers.cerebras import CerebrasProvider
-from generation.providers.openrouter import OpenRouterProvider
+from generation.provider_service import resolve_active_provider
 from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -387,30 +381,7 @@ class SuggestCompletionsView(APIView):
         if not (character_data.get('name') or '').strip():
             return Response({'error': '请先填写角色名'}, status=400)
 
-        try:
-            llm_config = request.user.llm_config
-        except Exception:
-            return Response({'error': '未配置 API Key，请先在设置页配置'}, status=400)
-
-        try:
-            key_obj = UserProviderKey.objects.get(
-                user=request.user, provider=llm_config.provider
-            )
-            api_key = decrypt_key(key_obj.api_key_encrypted)
-        except Exception:
-            return Response(
-                {'error': f'未找到 {llm_config.provider} 的 API Key，请在设置页保存'},
-                status=400,
-            )
-
-        provider_map = {
-            'anthropic': AnthropicProvider,
-            'groq':      GroqProvider,
-            'cerebras':  CerebrasProvider,
-            'openrouter':OpenRouterProvider,
-        }
-        ProviderClass = provider_map.get(llm_config.provider, GeminiProvider)
-        provider = ProviderClass(api_key)
+        provider = resolve_active_provider(request.user).instance
 
         output_language = request.data.get('output_language') or request.data.get('outputLanguage', 'zh')
         system = SUGGEST_SYSTEM_PROMPT_EN if output_language == 'en' else SUGGEST_SYSTEM_PROMPT

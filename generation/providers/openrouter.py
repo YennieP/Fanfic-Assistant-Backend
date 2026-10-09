@@ -9,6 +9,7 @@ import httpx
 from openai import OpenAI
 import openai
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,7 @@ _RETRYABLE_STATUS = {500, 502, 503}
 
 
 class OpenRouterProvider(BaseProvider):
-    supports_video = False
-    supports_embedding = False
-
-    MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
+    MODEL = get_provider_definition('openrouter').model
 
     def __init__(self, api_key: str):
         self.client = OpenAI(
@@ -87,6 +85,12 @@ class OpenRouterProvider(BaseProvider):
                         'OpenRouter 当前配置的免费模型不可用',
                         code='provider_model_unavailable',
                         http_status=503,
+                    ) from None
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'OpenRouter 账户当前没有可用额度',
+                        code='provider_payment_required',
+                        http_status=402,
                     ) from None
                 raise ProviderError(
                     'OpenRouter 请求失败，请稍后重试',
@@ -166,6 +170,12 @@ class OpenRouterProvider(BaseProvider):
                         'OpenRouter 当前配置的免费模型不可用',
                         code='provider_model_unavailable',
                         http_status=503,
+                    ) from None
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'OpenRouter 账户当前没有可用额度',
+                        code='provider_payment_required',
+                        http_status=402,
                     ) from None
                 raise ProviderError(
                     'OpenRouter 请求失败，请稍后重试',
