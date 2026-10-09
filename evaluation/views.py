@@ -10,13 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from logs.models import LlmCallLog
 from logs.decorators import log_llm_call
-from users.encryption import decrypt_key
-from users.models import UserProviderKey
-from generation.providers.anthropic import AnthropicProvider
-from generation.providers.gemini import GeminiProvider
-from generation.providers.groq import GroqProvider
-from generation.providers.cerebras import CerebrasProvider
-from generation.providers.openrouter import OpenRouterProvider
+from generation.provider_service import resolve_active_provider
 from generation.providers.base import ProviderError
 from .models import ConsistencyScore
 from .prompt import build_judge_prompt
@@ -60,33 +54,6 @@ def _parse_judge_response(result_text: str) -> tuple[int, str]:
         return score, reasoning
 
     raise ValueError(f'无法解析 judge 响应：{clean[:300]}')
-
-
-def _get_provider(llm_config, request_user):
-    """
-    修复：统一使用 UserProviderKey 获取 API Key，
-    与 generation/views.py 保持一致。
-    原实现错误地访问已不存在的 llm_config.api_key_encrypted。
-    同时支持 Groq（原实现遗漏）。
-    """
-    try:
-        key_obj = UserProviderKey.objects.get(
-            user=request_user, provider=llm_config.provider
-        )
-        api_key = decrypt_key(key_obj.api_key_encrypted)
-    except UserProviderKey.DoesNotExist:
-        raise ValueError(f'未找到 {llm_config.provider} 的 API Key，请在设置页保存')
-
-    if llm_config.provider == 'anthropic':
-        return AnthropicProvider(api_key)
-    elif llm_config.provider == 'groq':
-        return GroqProvider(api_key)
-    elif llm_config.provider == 'cerebras':
-        return CerebrasProvider(api_key)
-    elif llm_config.provider == 'openrouter':
-        return OpenRouterProvider(api_key)
-    else:
-        return GeminiProvider(api_key)
 
 
 def _get_active_rel_contexts(
@@ -149,11 +116,8 @@ class EvaluateView(APIView):
             except AUMod.DoesNotExist:
                 pass
 
-        try:
-            llm_config = request.user.llm_config
-            provider = _get_provider(llm_config, request.user)
-        except (Exception,) as e:
-            return Response({'error': str(e)}, status=400)
+        resolved_provider = resolve_active_provider(request.user)
+        provider = resolved_provider.instance
 
         # 查询关系上下文（空列表时 build_judge_prompt 行为与原实现完全一致）
         active_rel_contexts = _get_active_rel_contexts(character, active_relationship_ids)
@@ -200,7 +164,7 @@ class EvaluateView(APIView):
             generated_text=generated_text,
             score=score,
             judge_reasoning=reasoning,
-            judge_model=provider.MODEL,
+            judge_model=resolved_provider.definition.model,
         )
 
         return Response({

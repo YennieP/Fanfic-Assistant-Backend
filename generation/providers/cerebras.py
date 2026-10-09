@@ -8,6 +8,7 @@ import httpx
 from openai import OpenAI
 import openai
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,7 @@ _RETRYABLE_STATUS = {500, 502, 503}
 
 
 class CerebrasProvider(BaseProvider):
-    supports_video = False
-    supports_embedding = False
-
-    MODEL = 'gpt-oss-120b'
+    MODEL = get_provider_definition('cerebras').model
 
     def __init__(self, api_key: str):
         self.client = OpenAI(

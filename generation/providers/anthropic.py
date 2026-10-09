@@ -2,6 +2,7 @@ import time
 import logging
 import anthropic as anthropic_sdk
 from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ _RETRYABLE_STATUS = {500, 529}
 
 
 class AnthropicProvider(BaseProvider):
-    MODEL = 'claude-sonnet-4-6'
+    MODEL = get_provider_definition('anthropic').model
 
     def stream(self, system_prompt: str, user_prompt: str):
         """
@@ -69,9 +70,28 @@ class AnthropicProvider(BaseProvider):
                         code='provider_model_unavailable',
                         http_status=503,
                     ) from None
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'Anthropic 账户当前没有可用额度',
+                        code='provider_payment_required',
+                        http_status=402,
+                    ) from None
                 raise ProviderError(
                     'Anthropic 请求失败，请稍后重试',
                     code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
+
+            except anthropic_sdk.APITimeoutError:
+                if attempt == 0 and not started:
+                    logger.warning(
+                        'Anthropic timeout model=%s attempt=%d; retrying',
+                        self.MODEL, attempt + 1,
+                    )
+                    continue
+                raise ProviderError(
+                    'Anthropic 响应超时，请稍后重试',
+                    code='provider_timeout',
                     http_status=503,
                 ) from None
 
@@ -134,9 +154,28 @@ class AnthropicProvider(BaseProvider):
                         code='provider_model_unavailable',
                         http_status=503,
                     ) from None
+                if e.status_code == 402:
+                    raise ProviderError(
+                        'Anthropic 账户当前没有可用额度',
+                        code='provider_payment_required',
+                        http_status=402,
+                    ) from None
                 raise ProviderError(
                     'Anthropic 请求失败，请稍后重试',
                     code='provider_temporarily_unavailable',
+                    http_status=503,
+                ) from None
+
+            except anthropic_sdk.APITimeoutError:
+                if attempt == 0:
+                    logger.warning(
+                        'Anthropic timeout model=%s attempt=%d; retrying',
+                        self.MODEL, attempt + 1,
+                    )
+                    continue
+                raise ProviderError(
+                    'Anthropic 响应超时，请稍后重试',
+                    code='provider_timeout',
                     http_status=503,
                 ) from None
 

@@ -10,7 +10,7 @@ from django.core.cache import cache
 from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from users.encryption import decrypt_key
 from .prompt import build_prompt
-from .providers import get_provider
+from .provider_service import resolve_active_provider
 from .providers.base import ProviderError
 from logs.decorators import log_llm_call
 from logs.context import request_id_var
@@ -73,7 +73,7 @@ def _get_style_fragments(
     character: BaseCard,
     scene_input: dict,
     user,
-    llm_config,
+    provider_name: str,
     generation_id,
     limit: int = 5,
 ) -> list:
@@ -81,7 +81,7 @@ def _get_style_fragments(
     从 pgvector 检索与当前场景最相似的风格示例片段。
     limit 默认 5（支持候选面板）；注入时取 top-1，其余作为候选展示。
     """
-    if llm_config.provider not in ('gemini', 'groq', 'cerebras', 'openrouter'):
+    if provider_name not in ('gemini', 'groq', 'cerebras', 'openrouter'):
         return []
 
     try:
@@ -195,10 +195,10 @@ class GenerateStreamView(APIView):
             )
 
         try:
-            llm_config = request.user.llm_config
-        except Exception:
+            resolved_provider = resolve_active_provider(request.user)
+        except ProviderError as exc:
             return StreamingHttpResponse(
-                _error_stream('no_api_key'),
+                _error_stream(exc.code),
                 content_type='text/event-stream',
             )
 
@@ -227,25 +227,14 @@ class GenerateStreamView(APIView):
             except AUMod.DoesNotExist:
                 pass
 
-        try:
-            key_obj = UserProviderKey.objects.get(user=request.user, provider=llm_config.provider)
-            api_key = decrypt_key(key_obj.api_key_encrypted)
-        except Exception:
-            return StreamingHttpResponse(
-                _error_stream('no_api_key'),
-                content_type='text/event-stream',
-            )
-
-        # provider 的唯一构造点（测试通过 monkeypatch get_provider 注入 FakeProvider）。
-        # 行为与原 if/elif 一致：未知 provider 名回退 Gemini。
-        provider = get_provider(llm_config.provider, api_key)
+        provider = resolved_provider.instance
 
         # generation_id 在 stream 开始前生成，供 VectorSearchLog 关联使用
         generation_id = uuid.uuid4()
 
         # ── 候选面板逻辑 ──────────────────────────────────────────────────────
         all_candidates = _get_style_fragments(
-            character, scene_input, request.user, llm_config,
+            character, scene_input, request.user, resolved_provider.name,
             generation_id=generation_id, limit=5,
         )
 

@@ -4,6 +4,8 @@
 **不断言生成了什么文字**（LLM 输出非确定）。用了 FakeProvider 即保证全程不触真实 API。
 """
 import json
+from types import SimpleNamespace
+
 import pytest
 from django.urls import reverse
 from rest_framework.test import APIRequestFactory, force_authenticate
@@ -15,6 +17,7 @@ from logs.middleware import RequestLoggingMiddleware
 from logs.models import LlmCallLog, VectorSearchLog
 from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
+from users.models import UserLLMConfig
 
 
 def _parse_sse(response):
@@ -33,10 +36,12 @@ def _parse_sse(response):
 
 @pytest.mark.django_db
 def test_generate_stream_success_contract(api_client, make_user_with_key, monkeypatch):
-    # 注入 FakeProvider —— get_provider 是 provider 的唯一构造点，打桩即可。
+    # 注入 resolver 结果，确保测试不触发真实 provider。
     monkeypatch.setattr(
-        'generation.views.get_provider',
-        lambda name, api_key: FakeProvider(chunks=['你好', '世界']),
+        'generation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            name='gemini', instance=FakeProvider(chunks=['你好', '世界']),
+        ),
     )
 
     user = make_user_with_key(provider='gemini')
@@ -72,14 +77,16 @@ def test_generate_stream_success_contract(api_client, make_user_with_key, monkey
 @pytest.mark.django_db
 def test_stream_keeps_request_id_after_middleware_returns(make_user_with_key, monkeypatch):
     monkeypatch.setattr(
-        'generation.views.get_provider',
-        lambda name, api_key: FakeProvider(chunks=['hello']),
+        'generation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            name='gemini', instance=FakeProvider(chunks=['hello']),
+        ),
     )
     user = make_user_with_key(provider='gemini')
     character = BaseCardFactory(owner=user)
 
     def fake_style_search(
-        character, scene_input, user, llm_config, generation_id, limit=5,
+        character, scene_input, user, provider_name, generation_id, limit=5,
     ):
         VectorSearchLog.objects.create(
             request_id=request_id_var.get(),
@@ -135,8 +142,10 @@ def test_stream_error_records_business_failure(
     api_client, make_user_with_key, monkeypatch, provider_error, expected_code,
 ):
     monkeypatch.setattr(
-        'generation.views.get_provider',
-        lambda name, api_key: FakeProvider(error=provider_error),
+        'generation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            name='gemini', instance=FakeProvider(error=provider_error),
+        ),
     )
     user = make_user_with_key(provider='gemini')
     character = BaseCardFactory(owner=user)
@@ -163,8 +172,10 @@ def test_stream_error_records_business_failure(
 @pytest.mark.django_db
 def test_client_interruption_is_recorded(api_client, make_user_with_key, monkeypatch):
     monkeypatch.setattr(
-        'generation.views.get_provider',
-        lambda name, api_key: FakeProvider(chunks=['first', 'second']),
+        'generation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            name='gemini', instance=FakeProvider(chunks=['first', 'second']),
+        ),
     )
     user = make_user_with_key(provider='gemini')
     character = BaseCardFactory(owner=user)
@@ -186,3 +197,26 @@ def test_client_interruption_is_recorded(api_client, make_user_with_key, monkeyp
     log = LlmCallLog.objects.get(feature='character_generate')
     assert log.status == LlmCallLog.Status.ERROR
     assert log.error_message == 'stream interrupted before completion'
+
+
+@pytest.mark.django_db
+def test_unknown_stored_provider_fails_closed_in_sse(api_client, user_factory):
+    user = user_factory()
+    UserLLMConfig.objects.create(user=user, provider='unknown-provider')
+    character = BaseCardFactory(owner=user)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        reverse('generate-stream'),
+        data={
+            'character_id': str(character.id),
+            'scene_input': {'location': 'cafe', 'intent': 'meet'},
+        },
+        format='json',
+    )
+
+    assert response.status_code == 200
+    assert _parse_sse(response) == [{
+        'type': 'error',
+        'code': 'provider_model_unavailable',
+    }]

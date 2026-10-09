@@ -1,6 +1,7 @@
 """文章自动切割的两阶段替换与事务契约测试。"""
 
 import json
+from types import SimpleNamespace
 import pytest
 from django.db import connection
 
@@ -307,7 +308,10 @@ def test_api_replaces_old_draft_when_gap_starts_with_a_blank_line(
     provider = FakeProvider(complete_text=json.dumps({
         'segments': [{'start': 1, 'end': 1, 'type': 'story'}],
     }))
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: provider)
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=provider),
+    )
     api_client.force_authenticate(user=user)
 
     response = api_client.post(_endpoint(article), format='json')
@@ -330,7 +334,10 @@ def test_keeps_previous_drafts_when_a_later_gap_generation_fails(
     )
     calls = []
 
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
 
     def fail_second_gap(content, _provider, *, global_start, **_kwargs):
         assert connection.in_atomic_block is False
@@ -376,7 +383,10 @@ def test_keeps_previous_drafts_when_a_gap_result_is_invalid(
     article, _confirmed, first_draft, second_draft = _setup_article(
         make_user_with_key, api_client,
     )
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
     monkeypatch.setattr('examples.views.segment_article', lambda *_args, **_kwargs: generated)
 
     response = api_client.post(_endpoint(article), format='json')
@@ -393,7 +403,10 @@ def test_replaces_all_previous_drafts_in_one_short_transaction(
     article, confirmed, first_draft, second_draft = _setup_article(
         make_user_with_key, api_client,
     )
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
 
     def generate_gap(content, _provider, *, global_start, **_kwargs):
         assert connection.in_atomic_block is False
@@ -447,7 +460,10 @@ def test_success_replaces_an_old_draft_that_spans_a_gap(
         end=None,
         order=6,
     )
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
     monkeypatch.setattr(
         'examples.views.segment_article',
         lambda content, _provider, *, global_start, **_kwargs: _result_for(content, global_start),
@@ -468,7 +484,10 @@ def test_rolls_back_draft_deletion_when_bulk_insert_fails(
     article, _confirmed, first_draft, second_draft = _setup_article(
         make_user_with_key, api_client,
     )
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
     monkeypatch.setattr(
         'examples.views.segment_article',
         lambda content, _provider, *, global_start, **_kwargs: _result_for(content, global_start),
@@ -495,7 +514,10 @@ def test_retry_replaces_previous_drafts_only_after_a_complete_success(
     article, _confirmed, first_draft, second_draft = _setup_article(
         make_user_with_key, api_client,
     )
-    monkeypatch.setattr('examples.views._get_provider', lambda _config: object())
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
     call_count = 0
 
     def fail_once_then_generate(content, _provider, *, global_start, **_kwargs):

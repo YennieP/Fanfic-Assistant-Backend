@@ -15,13 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from users.encryption import decrypt_key
-from users.models import UserProviderKey
-from generation.providers.anthropic import AnthropicProvider
-from generation.providers.gemini import GeminiProvider
-from generation.providers.groq import GroqProvider
-from generation.providers.cerebras import CerebrasProvider
-from generation.providers.openrouter import OpenRouterProvider
+from generation.provider_service import resolve_active_provider
 from generation.providers.base import ProviderError
 from .models import BaseCard
 
@@ -106,29 +100,6 @@ def _parse_json(text: str):
     return {}
 
 
-def _get_provider(request):
-    """复用 generation/views.py 的 provider 获取模式。返回 (provider, error_msg)。"""
-    try:
-        llm_config = request.user.llm_config
-    except Exception:
-        return None, '未配置 API Key，请先在设置页配置'
-
-    try:
-        key_obj = UserProviderKey.objects.get(user=request.user, provider=llm_config.provider)
-        api_key = decrypt_key(key_obj.api_key_encrypted)
-    except Exception:
-        return None, f'未找到 {llm_config.provider} 的 API Key，请在设置页保存'
-
-    provider_map = {
-        'anthropic':  AnthropicProvider,
-        'groq':       GroqProvider,
-        'cerebras':   CerebrasProvider,
-        'openrouter': OpenRouterProvider,
-    }
-    ProviderClass = provider_map.get(llm_config.provider, GeminiProvider)
-    return ProviderClass(api_key), None
-
-
 class TranslateView(APIView):
     """
     POST /api/characters/{canonical_id}/translate/
@@ -167,9 +138,7 @@ class TranslateView(APIView):
         except BaseCard.DoesNotExist:
             return Response({'error': f'未找到 {source_lang} 版本的角色卡'}, status=404)
 
-        provider, err = _get_provider(request)
-        if err:
-            return Response({'error': err}, status=400)
+        provider = resolve_active_provider(request.user).instance
 
         # 构建翻译输入：camelCase → model attr，strip IDs
         to_translate = {}

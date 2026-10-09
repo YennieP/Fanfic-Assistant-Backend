@@ -1,7 +1,7 @@
 """测试替身：FakeProvider。
 
 实现 BaseProvider 契约，不联网、不花钱、确定可复现。
-通过 `monkeypatch.setattr('generation.views.get_provider', lambda name, key: FakeProvider(...))`
+通过 monkeypatch 替换调用方的 `resolve_active_provider`，
 注入到生成链路，替换真实 LLM provider。
 
 三种用法：

@@ -21,11 +21,7 @@ from .serializers import (
 )
 from .embedding import get_embedding, tags_to_text
 from .llm_pipeline import segment_article, infer_tags
-from generation.providers.anthropic import AnthropicProvider
-from generation.providers.gemini import GeminiProvider
-from generation.providers.groq import GroqProvider
-from generation.providers.cerebras import CerebrasProvider
-from generation.providers.openrouter import OpenRouterProvider
+from generation.provider_service import resolve_active_provider
 from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -55,31 +51,6 @@ def _extract_residuals(preserved: str, discarded: str) -> list[str]:
     if tail:
         blocks.append(tail)
     return blocks
-
-
-def _get_provider(llm_config):
-    from users.models import UserProviderKey
-    key_obj = UserProviderKey.objects.get(
-        user=llm_config.user, provider=llm_config.provider
-    )
-    api_key = decrypt_key(key_obj.api_key_encrypted)
-    if llm_config.provider == 'anthropic':
-        return AnthropicProvider(api_key)
-    elif llm_config.provider == 'groq':
-        return GroqProvider(api_key)
-    elif llm_config.provider == 'cerebras':
-        return CerebrasProvider(api_key)
-    elif llm_config.provider == 'openrouter':
-        return OpenRouterProvider(api_key)
-    else:
-        return GeminiProvider(api_key)
-
-
-def _get_llm_config(user):
-    try:
-        return user.llm_config
-    except Exception:
-        raise ValueError('未配置 LLM provider，请先在设置页配置')
 
 
 def _find_gaps(confirmed_fragments: list, total_lines: int) -> list[tuple[int, int]]:
@@ -256,11 +227,6 @@ class ArticleSegmentView(APIView):
     def post(self, request, article_id):
         article = get_object_or_404(Article, id=article_id, owner=request.user)
 
-        try:
-            llm_config = _get_llm_config(request.user)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
         lines       = article.content.splitlines()
         total_lines = len(lines)
         if total_lines == 0:
@@ -299,10 +265,7 @@ class ArticleSegmentView(APIView):
             return min(candidates, key=lambda f: f.start_line) if candidates else None
 
         # ── 逐缺口调用 LLM ──────────────────────────────────────────────────
-        try:
-            provider = _get_provider(llm_config)
-        except Exception as e:
-            return Response({'error': f'获取 LLM provider 失败：{str(e)}'}, status=400)
+        provider = resolve_active_provider(request.user).instance
 
         pending_fragments: list[Fragment] = []
 
@@ -778,17 +741,12 @@ class FragmentInferTagsView(APIView):
     def post(self, request, fragment_id):
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
 
-        try:
-            llm_config = _get_llm_config(request.user)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
         language = request.data.get('lang', 'zh')
         if language not in ('zh', 'en'):
             language = 'zh'
 
         try:
-            provider = _get_provider(llm_config)
+            provider = resolve_active_provider(request.user).instance
             tags = infer_tags(fragment.text, provider, language=language, user=request.user)
         except ProviderError:
             raise
