@@ -1,0 +1,27 @@
+name: openrouter-model-monitor
+
+on:
+  schedule:
+    - cron: '23 16 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openrouter-model-monitor
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Check configured OpenRouter model
+        run: python scripts/check_openrouter_model.py

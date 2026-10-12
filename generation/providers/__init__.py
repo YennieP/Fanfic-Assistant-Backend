@@ -1,13 +1,24 @@
 """Provider factory backed by the single catalog."""
 
-from django.utils.module_loading import import_string
+from __future__ import annotations
 
-from .base import BaseProvider, ProviderError
+from typing import TYPE_CHECKING
+
 from .catalog import get_provider_definition
+
+
+if TYPE_CHECKING:
+    from .base import BaseProvider
 
 
 def get_provider(name: str, api_key: str) -> BaseProvider:
     """Construct a known provider; unknown names fail closed."""
+    # Keep catalog imports usable by dependency-free operational scripts.
+    # Django and provider runtime types are required only when constructing an
+    # implementation, not when reading the pure-data catalog.
+    from django.utils.module_loading import import_string
+    from .base import ProviderError
+
     definition = get_provider_definition(name)
     if definition is None:
         raise ProviderError(
