@@ -16,6 +16,25 @@ class UserProviderKey(models.Model):
     )
     provider = models.CharField(max_length=20)
     api_key_encrypted = models.CharField(max_length=500)
+    # UX-002: null means this saved key has never been functionally checked.
+    # Behavior that writes these fields lands separately after this additive
+    # schema is deployed, so old application versions remain compatible.
+    verification_status = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+    )
+    verification_checked_at = models.DateTimeField(null=True, blank=True)
+    verification_model = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+    )
+    verification_resolved_model = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
