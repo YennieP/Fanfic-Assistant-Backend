@@ -18,7 +18,7 @@ class GroqProvider(BaseProvider):
     MODEL = get_provider_definition('groq').model
 
     def stream(self, system_prompt: str, user_prompt: str):
-        client = groq_sdk.Groq(api_key=self.api_key)
+        client = groq_sdk.Groq(api_key=self.api_key, max_retries=0)
 
         for attempt in range(2):
             started = False
@@ -121,7 +121,7 @@ class GroqProvider(BaseProvider):
         *,
         options: CompletionOptions,
     ) -> CompleteResult:
-        client = groq_sdk.Groq(api_key=self.api_key)
+        client = groq_sdk.Groq(api_key=self.api_key, max_retries=0)
 
         for attempt in range(2):
             try:

@@ -27,7 +27,10 @@ class AnthropicProvider(BaseProvider):
         一旦开始向前端输出内容（started=True），错误直接向上传播，
         由 views.py 的 except 发出 SSE error 事件。
         """
-        client = anthropic_sdk.Anthropic(api_key=self.api_key)
+        client = anthropic_sdk.Anthropic(
+            api_key=self.api_key,
+            max_retries=0,
+        )
 
         for attempt in range(2):
             started = False
@@ -121,7 +124,10 @@ class AnthropicProvider(BaseProvider):
         *,
         options: CompletionOptions,
     ) -> CompleteResult:
-        client = anthropic_sdk.Anthropic(api_key=self.api_key)
+        client = anthropic_sdk.Anthropic(
+            api_key=self.api_key,
+            max_retries=0,
+        )
 
         for attempt in range(2):
             try:

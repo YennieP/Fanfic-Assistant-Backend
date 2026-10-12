@@ -113,7 +113,7 @@ def _provider_with_failing_complete(monkeypatch, provider_name, error):
     if provider_name == 'anthropic':
         monkeypatch.setattr(
             'generation.providers.anthropic.anthropic_sdk.Anthropic',
-            lambda api_key: SimpleNamespace(messages=failing_call),
+            lambda api_key, **_kwargs: SimpleNamespace(messages=failing_call),
         )
         provider = AnthropicProvider('key')
     elif provider_name == 'gemini':
@@ -129,7 +129,7 @@ def _provider_with_failing_complete(monkeypatch, provider_name, error):
         )
         monkeypatch.setattr(
             'generation.providers.groq.groq_sdk.Groq',
-            lambda api_key: client,
+            lambda api_key, **_kwargs: client,
         )
         provider = GroqProvider('key')
     else:
@@ -146,7 +146,7 @@ def _provider_with_failing_stream(monkeypatch, provider_name, error):
         failing_call.stream = failing_call.create
         monkeypatch.setattr(
             'generation.providers.anthropic.anthropic_sdk.Anthropic',
-            lambda api_key: SimpleNamespace(messages=failing_call),
+            lambda api_key, **_kwargs: SimpleNamespace(messages=failing_call),
         )
         provider = AnthropicProvider('key')
     elif provider_name == 'gemini':
@@ -162,7 +162,7 @@ def _provider_with_failing_stream(monkeypatch, provider_name, error):
         )
         monkeypatch.setattr(
             'generation.providers.groq.groq_sdk.Groq',
-            lambda api_key: client,
+            lambda api_key, **_kwargs: client,
         )
         provider = GroqProvider('key')
     else:
