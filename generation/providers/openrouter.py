@@ -1,8 +1,9 @@
 """
-OpenRouter provider — meta-llama/llama-3.3-70b-instruct:free
-免费模型 200 req/天（充值 $10 后升至 1000 req/天）
+OpenRouter provider — google/gemma-4-31b-it:free
+免费模型当前限制为 20 req/分钟；每日限额取决于账户累计购买的 credits
 OpenAI SDK 兼容，需要 HTTP-Referer header
 API Key 申请：https://openrouter.ai/keys
+限额说明：https://openrouter.ai/docs/api-reference/limits
 """
 import logging
 import openai

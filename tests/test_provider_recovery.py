@@ -98,6 +98,7 @@ def test_recovery_models_use_official_replacements():
     assert AnthropicProvider.MODEL == 'claude-sonnet-4-6'
     assert GroqProvider.MODEL == 'openai/gpt-oss-120b'
     assert CerebrasProvider.MODEL == 'gpt-oss-120b'
+    assert OpenRouterProvider.MODEL == 'google/gemma-4-31b-it:free'
 
 
 def test_groq_gpt_oss_complete_requests_json_with_low_reasoning(monkeypatch):
@@ -180,6 +181,33 @@ def test_cerebras_gpt_oss_complete_requests_json_with_low_reasoning():
         ],
         'max_tokens': 654,
         'reasoning_effort': 'low',
+        'response_format': {'type': 'json_object'},
+    }]
+
+
+def test_openrouter_gemma_complete_requests_json_without_reasoning_parameter():
+    completions = _FakeCompletions(result=_completion_result())
+    provider = object.__new__(OpenRouterProvider)
+    provider.client = _chat_client(completions)
+
+    result = provider.complete(
+        'system',
+        'user',
+        options=CompletionOptions(
+            response_format='json',
+            max_tokens=4000,
+            reasoning_effort='low',
+        ),
+    )
+
+    assert result.text == '{"ok":true}'
+    assert completions.calls == [{
+        'model': 'google/gemma-4-31b-it:free',
+        'messages': [
+            {'role': 'system', 'content': 'system'},
+            {'role': 'user', 'content': 'user'},
+        ],
+        'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
     }]
 

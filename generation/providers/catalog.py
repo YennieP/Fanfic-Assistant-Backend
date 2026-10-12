@@ -37,7 +37,7 @@ PROVIDER_CATALOG = MappingProxyType({
     'openrouter': ProviderDefinition(
         name='openrouter',
         provider_class='generation.providers.openrouter.OpenRouterProvider',
-        model='meta-llama/llama-3.3-70b-instruct:free',
+        model='google/gemma-4-31b-it:free',
     ),
 })
 
