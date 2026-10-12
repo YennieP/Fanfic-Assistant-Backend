@@ -47,7 +47,7 @@ def _provider_with_sdk_transport(
     provider_name,
     *,
     status=None,
-    connection_error=False,
+    transport_error=None,
 ):
     calls = []
 
@@ -57,9 +57,13 @@ def _provider_with_sdk_transport(
 
         def handler(request):
             calls.append(request)
-            if connection_error:
+            if transport_error == 'connection':
                 raise transport_module.ConnectError(
                     'safe test connection failure', request=request,
+                )
+            if transport_error == 'timeout':
+                raise transport_module.ReadTimeout(
+                    'safe test timeout', request=request,
                 )
             return transport_module.Response(
                 status,
@@ -84,9 +88,13 @@ def _provider_with_sdk_transport(
 
         def handler(request):
             calls.append(request)
-            if connection_error:
+            if transport_error == 'connection':
                 raise httpx.ConnectError(
                     'safe test connection failure', request=request,
+                )
+            if transport_error == 'timeout':
+                raise httpx.ReadTimeout(
+                    'safe test timeout', request=request,
                 )
             return httpx.Response(
                 status,
@@ -111,9 +119,13 @@ def _provider_with_sdk_transport(
 
         def handler(request):
             calls.append(request)
-            if connection_error:
+            if transport_error == 'connection':
                 raise httpx.ConnectError(
                     'safe test connection failure', request=request,
+                )
+            if transport_error == 'timeout':
+                raise httpx.ReadTimeout(
+                    'safe test timeout', request=request,
                 )
             return httpx.Response(
                 status,
@@ -174,19 +186,28 @@ def test_project_retryable_status_is_two_wire_requests(
 
 
 @pytest.mark.parametrize('provider_name', PROVIDER_TYPES)
-def test_project_connection_retry_is_two_wire_requests(
+@pytest.mark.parametrize(
+    ('transport_error', 'expected_code'),
+    [
+        ('connection', 'provider_connection_failed'),
+        ('timeout', 'provider_timeout'),
+    ],
+)
+def test_project_transport_retry_is_two_wire_requests(
     monkeypatch,
     provider_name,
+    transport_error,
+    expected_code,
 ):
     monkeypatch.setattr(time, 'sleep', lambda _wait: None)
     provider, calls = _provider_with_sdk_transport(
         monkeypatch,
         provider_name,
-        connection_error=True,
+        transport_error=transport_error,
     )
 
     with pytest.raises(ProviderError) as exc_info:
         provider.complete('system', 'user', options=JSON_OPTIONS)
 
-    assert exc_info.value.code == 'provider_connection_failed'
+    assert exc_info.value.code == expected_code
     assert len(calls) == 2
