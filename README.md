@@ -95,7 +95,7 @@ Windows：
 ## 关键运行边界
 
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
-- 当前文本模型为 Anthropic `claude-sonnet-4-6`、Gemini `gemini-2.5-flash`、Groq `openai/gpt-oss-120b`、Cerebras `gpt-oss-120b`、OpenRouter `google/gemma-4-31b-it:free`。OpenRouter 固定免费模型不会动态路由到未披露模型或自动改用付费模型；当前公开限制为每分钟 20 次，每日限额取决于 OpenRouter 账户累计购买的 credits，详情以官方限额说明为准。
+- 当前文本模型为 Anthropic `claude-sonnet-4-6`、Gemini `gemini-2.5-flash`、Groq `openai/gpt-oss-120b`、Cerebras `gpt-oss-120b`、OpenRouter `google/gemma-4-31b-it:free`。OpenRouter 固定免费模型不会动态路由到未披露模型或自动改用付费模型；当前公开限制为每分钟 20 次，每日限额取决于 OpenRouter 账户累计购买的 credits，详情以官方限额说明为准。独立的 `openrouter-model-monitor` 定时/手动 workflow 使用无 Key 公开目录检查该模型仍存在、文本价格仍为零且仍支持 `response_format`；它不在普通 push/PR 上运行。
 - 保存候选 provider Key 和切换已有 provider 都会先执行一次低输出预算的真实 text completion；验证失败不会覆盖旧 Key或改变 active provider。`POST /api/auth/llm-config/verify/` 可显式复查已存 Key，GET 和页面加载不会自动调用 provider 或消耗额度。响应只返回是否已存 Key、catalog 模型、最近一次安全验证状态/时间及请求和实际模型，不返回明文 Key。
 - GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、402、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。Cerebras 402 单独表示账户没有可用额度或计费权限，不得误报为 Key 无效或短暂服务故障。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
