@@ -31,16 +31,17 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class LLMConfigSerializer(serializers.ModelSerializer):
     """
-    返回 activeProvider 和每个 provider 的 hasKey 状态 + capabilities。
+    返回 activeProvider，以及每个 provider 的 catalog 模型、hasKey、
+    capabilities 和最近一次功能性验证状态。
     Key 明文永不出现在响应中。
 
     经 djangorestframework-camelcase 中间件转换后，前端收到：
     {
       activeProvider: 'gemini',
       providers: {
-        anthropic: { hasKey: false, capabilities: { video: false, embedding: false } },
-        gemini:    { hasKey: true,  capabilities: { video: true,  embedding: true  } },
-        groq:      { hasKey: false, capabilities: { video: false, embedding: false } },
+        anthropic: { hasKey: false, model: '...', verificationStatus: null, ... },
+        gemini:    { hasKey: true,  model: '...', verificationStatus: 'valid', ... },
+        groq:      { hasKey: false, model: '...', verificationStatus: null, ... },
       }
     }
     """
@@ -52,15 +53,32 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         fields = ['active_provider', 'providers']
 
     def get_providers(self, obj):
-        existing = set(
-            UserProviderKey.objects
-            .filter(user=obj.user)
-            .values_list('provider', flat=True)
-        )
+        existing = {
+            key.provider: key
+            for key in UserProviderKey.objects.filter(user=obj.user)
+        }
         return {
-            p: {
-                'has_key': p in existing,
-                'capabilities': _provider_capabilities(p),
-            }
+            p: self._provider_info(p, existing.get(p))
             for p in SUPPORTED_PROVIDERS
+        }
+
+    @staticmethod
+    def _provider_info(provider_name, key):
+        definition = PROVIDER_CATALOG[provider_name]
+        return {
+            'has_key': key is not None,
+            'model': definition.model,
+            'capabilities': _provider_capabilities(provider_name),
+            'verification_status': (
+                key.verification_status if key else None
+            ),
+            'verification_checked_at': (
+                key.verification_checked_at if key else None
+            ),
+            'verification_model': (
+                key.verification_model if key else None
+            ),
+            'verification_resolved_model': (
+                key.verification_resolved_model if key else None
+            ),
         }
