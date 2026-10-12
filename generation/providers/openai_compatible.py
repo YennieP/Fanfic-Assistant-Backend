@@ -31,6 +31,10 @@ def create_client(
         'api_key': api_key,
         'base_url': base_url,
         'timeout': DEFAULT_TIMEOUT,
+        # Project-level provider code owns the complete retry policy. Leaving
+        # the SDK default enabled would turn one 429 into three wire requests
+        # and compound one project retry into as many as six requests.
+        'max_retries': 0,
     }
     if default_headers:
         kwargs['default_headers'] = default_headers

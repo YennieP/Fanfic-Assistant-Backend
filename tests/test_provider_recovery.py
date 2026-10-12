@@ -105,7 +105,7 @@ def test_groq_gpt_oss_complete_requests_json_with_low_reasoning(monkeypatch):
     completions = _FakeCompletions(result=_completion_result())
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     result = GroqProvider('key').complete(
@@ -135,7 +135,7 @@ def test_groq_complete_text_mode_omits_json_and_optional_reasoning(monkeypatch):
     completions = _FakeCompletions(result=_completion_result())
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     GroqProvider('key').complete(
@@ -216,7 +216,7 @@ def test_groq_gpt_oss_stream_uses_low_reasoning(monkeypatch):
     completions = _FakeCompletions(result=iter(()))
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     list(GroqProvider('key').stream('system', 'user'))
@@ -248,7 +248,9 @@ def test_cerebras_gpt_oss_stream_uses_low_reasoning():
             lambda monkeypatch, error: (
                 monkeypatch.setattr(
                     'generation.providers.groq.groq_sdk.Groq',
-                    lambda api_key: _chat_client(_FakeCompletions(error=error)),
+                    lambda api_key, **_kwargs: _chat_client(
+                        _FakeCompletions(error=error),
+                    ),
                 ),
                 GroqProvider('key'),
             )[1],
@@ -329,7 +331,7 @@ def test_anthropic_404_is_safe_model_unavailable(monkeypatch):
     )
     monkeypatch.setattr(
         'generation.providers.anthropic.anthropic_sdk.Anthropic',
-        lambda api_key: SimpleNamespace(messages=messages),
+        lambda api_key, **_kwargs: SimpleNamespace(messages=messages),
     )
 
     with pytest.raises(ProviderError) as exc_info:
@@ -357,7 +359,7 @@ def test_groq_status_errors_are_safe(
     completions = _FakeCompletions(error=error)
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     with pytest.raises(ProviderError) as exc_info:
@@ -404,7 +406,7 @@ def test_retryable_status_retries_once_without_logging_vendor_body(
     completions = _FakeCompletions(error=error)
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     with pytest.raises(ProviderError) as exc_info:
@@ -424,7 +426,7 @@ def test_connection_error_retries_once_then_becomes_safe(monkeypatch, caplog):
     completions = _FakeCompletions(error=error)
     monkeypatch.setattr(
         'generation.providers.groq.groq_sdk.Groq',
-        lambda api_key: _chat_client(completions),
+        lambda api_key, **_kwargs: _chat_client(completions),
     )
 
     with pytest.raises(ProviderError) as exc_info:
@@ -501,7 +503,7 @@ def test_llm_log_stores_only_provider_error_code():
             lambda monkeypatch, error: (
                 monkeypatch.setattr(
                     'generation.providers.anthropic.anthropic_sdk.Anthropic',
-                    lambda api_key: SimpleNamespace(
+                    lambda api_key, **_kwargs: SimpleNamespace(
                         messages=_FakeCompletions(error=error),
                     ),
                 ),
@@ -513,7 +515,7 @@ def test_llm_log_stores_only_provider_error_code():
             lambda monkeypatch, error: (
                 monkeypatch.setattr(
                     'generation.providers.groq.groq_sdk.Groq',
-                    lambda api_key: _chat_client(
+                    lambda api_key, **_kwargs: _chat_client(
                         _FakeCompletions(error=error),
                     ),
                 ),
@@ -570,7 +572,7 @@ def test_sdk_timeout_is_not_misclassified_as_connection(
         if provider_type is AnthropicProvider
         else _chat_client(completions)
     )
-    monkeypatch.setattr(module_path, lambda api_key: client)
+    monkeypatch.setattr(module_path, lambda api_key, **_kwargs: client)
 
     with pytest.raises(ProviderError) as exc_info:
         provider_type('key').complete('system', 'user', options=JSON_OPTIONS)
@@ -711,7 +713,7 @@ def test_non_gemini_midstream_5xx_is_safe_and_never_retried(
         messages = _Messages()
         monkeypatch.setattr(
             'generation.providers.anthropic.anthropic_sdk.Anthropic',
-            lambda api_key: SimpleNamespace(messages=messages),
+            lambda api_key, **_kwargs: SimpleNamespace(messages=messages),
         )
         provider = AnthropicProvider('key')
         calls = lambda: messages.calls
@@ -726,7 +728,7 @@ def test_non_gemini_midstream_5xx_is_safe_and_never_retried(
         if provider_name == 'groq':
             monkeypatch.setattr(
                 'generation.providers.groq.groq_sdk.Groq',
-                lambda api_key: _chat_client(completions),
+                lambda api_key, **_kwargs: _chat_client(completions),
             )
             provider = GroqProvider('key')
         elif provider_name == 'cerebras':
