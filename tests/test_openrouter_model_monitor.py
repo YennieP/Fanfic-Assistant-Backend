@@ -1,9 +1,15 @@
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from scripts.check_openrouter_model import CatalogCheckError, validate_catalog
 
 
 MODEL_ID = "google/gemma-4-31b-it:free"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _payload(*, prompt="0", completion="0", parameters=None):
@@ -47,3 +53,26 @@ def test_validate_catalog_rejects_missing_response_format_support():
 def test_validate_catalog_rejects_malformed_response():
     with pytest.raises(CatalogCheckError, match="does not contain a data list"):
         validate_catalog({"data": {}}, MODEL_ID)
+
+
+def test_monitor_runs_without_project_dependencies(tmp_path):
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(_payload()), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(ROOT / "scripts" / "check_openrouter_model.py"),
+            "--catalog-file",
+            str(catalog_file),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"OpenRouter model check passed: {MODEL_ID}" in result.stdout

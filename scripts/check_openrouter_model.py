@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from decimal import Decimal, InvalidOperation
@@ -70,14 +71,34 @@ def fetch_catalog(url: str = CATALOG_URL) -> object:
         return json.load(response)
 
 
-def main() -> int:
+def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Check the configured model in OpenRouter's public catalog.",
+    )
+    parser.add_argument(
+        "--catalog-file",
+        type=Path,
+        help="Read a local catalog response instead of calling OpenRouter.",
+    )
+    return parser.parse_args(arguments)
+
+
+def load_catalog(catalog_file: Path | None) -> object:
+    if catalog_file is None:
+        return fetch_catalog()
+    with catalog_file.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def main(arguments: list[str] | None = None) -> int:
+    args = parse_arguments(arguments)
     definition = get_provider_definition("openrouter")
     if definition is None:
         print("OpenRouter model check failed: catalog definition is missing", file=sys.stderr)
         return 1
 
     try:
-        model = validate_catalog(fetch_catalog(), definition.model)
+        model = validate_catalog(load_catalog(args.catalog_file), definition.model)
     except (CatalogCheckError, json.JSONDecodeError, OSError, URLError) as exc:
         print(f"OpenRouter model check failed: {exc}", file=sys.stderr)
         return 1
