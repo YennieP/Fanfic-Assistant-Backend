@@ -1,5 +1,6 @@
 from django.conf import settings
 
+from generation.providers.base import CompletionOptions
 from generation.providers.gemini import GeminiProvider
 
 
@@ -48,7 +49,11 @@ def test_gemini_complete_requests_structured_json_and_logs_safe_capacity(
     result = GeminiProvider('test-key').complete(
         system_prompt='Return JSON.',
         user_prompt='Input',
-        max_tokens=800,
+        options=CompletionOptions(
+            response_format='json',
+            max_tokens=800,
+            reasoning_effort='low',
+        ),
     )
 
     assert result.text == '{"segments": ["private-model-output"]}'
@@ -62,6 +67,32 @@ def test_gemini_complete_requests_structured_json_and_logs_safe_capacity(
     )
     assert all('private-model-output' not in message for message in telemetry)
     assert all('test-key' not in message for message in telemetry)
+
+
+def test_gemini_complete_text_mode_does_not_force_json(monkeypatch):
+    captured = {}
+
+    class _Models:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    monkeypatch.setattr(
+        'generation.providers.gemini.genai.Client',
+        lambda api_key: type('Client', (), {'models': _Models()})(),
+    )
+
+    GeminiProvider('test-key').complete(
+        system_prompt='Return prose.',
+        user_prompt='Input',
+        options=CompletionOptions(
+            response_format='text',
+            max_tokens=500,
+        ),
+    )
+
+    assert captured['config'].response_mime_type is None
+    assert captured['config'].max_output_tokens == 500
 
 
 def test_gemini_capacity_telemetry_is_visible_at_default_log_level():

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generator, Union
+from typing import Generator, Literal, Union
 
 
 @dataclass
@@ -16,6 +16,27 @@ class CompleteResult:
     model: str
     prompt_tokens: int
     completion_tokens: int
+
+
+CompletionResponseFormat = Literal['json', 'text']
+ReasoningEffort = Literal['low', 'medium', 'high']
+
+
+@dataclass(frozen=True)
+class CompletionOptions:
+    """Caller-owned options for one synchronous completion request."""
+
+    response_format: CompletionResponseFormat
+    max_tokens: int = 2000
+    reasoning_effort: ReasoningEffort | None = None
+
+    def __post_init__(self):
+        if self.response_format not in ('json', 'text'):
+            raise ValueError('response_format must be json or text')
+        if self.max_tokens <= 0:
+            raise ValueError('max_tokens must be positive')
+        if self.reasoning_effort not in (None, 'low', 'medium', 'high'):
+            raise ValueError('unsupported reasoning_effort')
 
 
 class ProviderError(Exception):
@@ -71,10 +92,13 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def complete(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        options: CompletionOptions,
     ) -> CompleteResult:
         """
-        非流式一次性调用。
-        max_tokens 由调用场景显式调整；当前文章切割使用 4000。
+        非流式一次性调用。响应格式与可选 reasoning 强度由调用方显式声明。
         """
         ...

@@ -1,7 +1,13 @@
 import time
 import logging
 import anthropic as anthropic_sdk
-from .base import BaseProvider, UsageInfo, CompleteResult, ProviderError
+from .base import (
+    BaseProvider,
+    CompleteResult,
+    CompletionOptions,
+    ProviderError,
+    UsageInfo,
+)
 from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
@@ -109,7 +115,11 @@ class AnthropicProvider(BaseProvider):
                 ) from None
 
     def complete(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 2000
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        options: CompletionOptions,
     ) -> CompleteResult:
         client = anthropic_sdk.Anthropic(api_key=self.api_key)
 
@@ -117,7 +127,7 @@ class AnthropicProvider(BaseProvider):
             try:
                 msg = client.messages.create(
                     model=self.MODEL,
-                    max_tokens=max_tokens,
+                    max_tokens=options.max_tokens,
                     system=system_prompt,
                     messages=[{'role': 'user', 'content': user_prompt}],
                 )

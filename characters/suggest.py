@@ -7,6 +7,7 @@ POST /api/characters/suggest-completions/
 """
 import json
 import re
+import uuid
 import logging
 
 from rest_framework.views import APIView
@@ -14,7 +15,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from generation.provider_service import resolve_active_provider
-from generation.providers.base import ProviderError
+from generation.providers.base import CompletionOptions, ProviderError
+from logs.decorators import log_llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -387,11 +389,22 @@ class SuggestCompletionsView(APIView):
         system = SUGGEST_SYSTEM_PROMPT_EN if output_language == 'en' else SUGGEST_SYSTEM_PROMPT
         user_prompt = build_suggest_prompt(character_data, output_language)
 
-        try:
-            result = provider.complete(
+        @log_llm_call(feature='character_suggest', sync=True)
+        def _call_suggest(user=None, generation_id=None):
+            return provider.complete(
                 system_prompt=system,
                 user_prompt=user_prompt,
-                max_tokens=2000,
+                options=CompletionOptions(
+                    response_format='json',
+                    max_tokens=2000,
+                    reasoning_effort='low',
+                ),
+            )
+
+        try:
+            result = _call_suggest(
+                user=request.user,
+                generation_id=uuid.uuid4(),
             )
         except ProviderError:
             raise

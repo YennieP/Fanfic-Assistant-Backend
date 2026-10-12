@@ -18,6 +18,7 @@ import logging
 from logs.decorators import log_llm_call
 
 from core.taxonomy import TAXONOMY, TAXONOMY_EN
+from generation.providers.base import CompletionOptions
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +134,19 @@ def segment_article(
             return provider.complete(
                 system_prompt=SEGMENTATION_SYSTEM_PROMPT,
                 user_prompt=_seg_prompt,
-                # Gemini 2.5 may spend part of this budget on internal
-                # reasoning. Production capacity checks exhausted 2000 tokens
-                # on a 2763-character, 215-line chunk before JSON completed.
-                max_tokens=SEGMENTATION_MAX_OUTPUT_TOKENS,
+                options=CompletionOptions(
+                    response_format='json',
+                    # Gemini 2.5 may spend part of this budget on internal
+                    # reasoning. Production capacity checks exhausted 2000
+                    # tokens on a 2763-character, 215-line chunk before JSON
+                    # completed.
+                    max_tokens=SEGMENTATION_MAX_OUTPUT_TOKENS,
+                    reasoning_effort='low',
+                ),
             )
 
-        chunk_text_result = _call_segment(user=user, generation_id=uuid.uuid4())
+        chunk_result = _call_segment(user=user, generation_id=uuid.uuid4())
+        chunk_text_result = chunk_result.text
         if not chunk_text_result:
             logger.warning('Segment chunk %d returned empty response, skipping', chunk_idx)
             continue
@@ -299,10 +306,14 @@ def infer_tags(fragment_text: str, provider, language: str = 'zh', user=None) ->
         return provider.complete(
             system_prompt=system,
             user_prompt=_infer_prompt,
-            max_tokens=1000,
+            options=CompletionOptions(
+                response_format='json',
+                max_tokens=1000,
+                reasoning_effort='low',
+            ),
         )
 
-    raw_text = _call_infer(user=user, generation_id=uuid.uuid4())
+    raw_text = _call_infer(user=user, generation_id=uuid.uuid4()).text
     logger.info('[infer_tags] raw LLM output: %s', raw_text)
     raw = _parse_json(raw_text)
     logger.info('[infer_tags] parsed result: %s', raw)

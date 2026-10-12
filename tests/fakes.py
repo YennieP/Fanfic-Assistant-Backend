@@ -9,11 +9,21 @@
 - 错误码  ：FakeProvider(error=ProviderError('x', code='provider_key_invalid'))
 - 评估链路：FakeProvider(complete_text='{"score": 8, "reasoning": "ok"}')
 """
+from dataclasses import dataclass
+
 from generation.providers.base import (
     BaseProvider,
     CompleteResult,
+    CompletionOptions,
     UsageInfo,
 )
+
+
+@dataclass(frozen=True)
+class CompleteCall:
+    system_prompt: str
+    user_prompt: str
+    options: CompletionOptions
 
 
 class FakeProvider(BaseProvider):
@@ -30,6 +40,7 @@ class FakeProvider(BaseProvider):
         self._chunks = chunks if chunks is not None else ['你好', '，', '世界']
         self._error = error
         self._complete_text = complete_text
+        self.complete_calls = []
 
     def stream(self, system_prompt, user_prompt):
         if self._error:
@@ -40,7 +51,12 @@ class FakeProvider(BaseProvider):
         # log_llm_call 装饰器据此过滤用量、写 LlmCallLog。
         yield UsageInfo(model='fake', prompt_tokens=10, completion_tokens=3)
 
-    def complete(self, system_prompt, user_prompt, max_tokens=2000):
+    def complete(self, system_prompt, user_prompt, *, options):
+        self.complete_calls.append(CompleteCall(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            options=options,
+        ))
         if self._error:
             raise self._error
         return CompleteResult(

@@ -9,7 +9,7 @@ import requests
 from google.genai.errors import ClientError, ServerError
 
 from generation.providers.anthropic import AnthropicProvider
-from generation.providers.base import ProviderError
+from generation.providers.base import CompletionOptions, ProviderError
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
@@ -17,6 +17,10 @@ from generation.providers.openrouter import OpenRouterProvider
 
 
 VENDOR_MARKER = 'vendor-user-123 request-secret-456'
+JSON_OPTIONS = CompletionOptions(
+    response_format='json',
+    reasoning_effort='low',
+)
 
 
 class _FakeCompletions:
@@ -103,7 +107,15 @@ def test_groq_gpt_oss_complete_requests_json_with_low_reasoning(monkeypatch):
         lambda api_key: _chat_client(completions),
     )
 
-    result = GroqProvider('key').complete('system', 'user', max_tokens=321)
+    result = GroqProvider('key').complete(
+        'system',
+        'user',
+        options=CompletionOptions(
+            response_format='json',
+            max_tokens=321,
+            reasoning_effort='low',
+        ),
+    )
 
     assert result.text == '{"ok":true}'
     assert completions.calls == [{
@@ -118,12 +130,46 @@ def test_groq_gpt_oss_complete_requests_json_with_low_reasoning(monkeypatch):
     }]
 
 
+def test_groq_complete_text_mode_omits_json_and_optional_reasoning(monkeypatch):
+    completions = _FakeCompletions(result=_completion_result())
+    monkeypatch.setattr(
+        'generation.providers.groq.groq_sdk.Groq',
+        lambda api_key: _chat_client(completions),
+    )
+
+    GroqProvider('key').complete(
+        'system',
+        'user',
+        options=CompletionOptions(
+            response_format='text',
+            max_tokens=222,
+        ),
+    )
+
+    assert completions.calls == [{
+        'model': 'openai/gpt-oss-120b',
+        'messages': [
+            {'role': 'system', 'content': 'system'},
+            {'role': 'user', 'content': 'user'},
+        ],
+        'max_tokens': 222,
+    }]
+
+
 def test_cerebras_gpt_oss_complete_requests_json_with_low_reasoning():
     completions = _FakeCompletions(result=_completion_result())
     provider = object.__new__(CerebrasProvider)
     provider.client = _chat_client(completions)
 
-    result = provider.complete('system', 'user', max_tokens=654)
+    result = provider.complete(
+        'system',
+        'user',
+        options=CompletionOptions(
+            response_format='json',
+            max_tokens=654,
+            reasoning_effort='low',
+        ),
+    )
 
     assert result.text == '{"ok":true}'
     assert completions.calls == [{
@@ -200,7 +246,7 @@ def test_openai_compatible_404_is_safe_model_unavailable(
     provider = provider_factory(monkeypatch, error())
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_model_unavailable'
     assert exc_info.value.http_status == 503
@@ -215,7 +261,7 @@ def test_cerebras_logs_only_safe_status_metadata(caplog):
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_temporarily_unavailable'
     assert 'status=422' in caplog.text
@@ -234,7 +280,7 @@ def test_cerebras_402_is_safe_payment_required(method):
 
     with pytest.raises(ProviderError) as exc_info:
         if method == 'complete':
-            provider.complete('system', 'user')
+            provider.complete('system', 'user', options=JSON_OPTIONS)
         else:
             list(provider.stream('system', 'user'))
 
@@ -259,7 +305,9 @@ def test_anthropic_404_is_safe_model_unavailable(monkeypatch):
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        AnthropicProvider('key').complete('system', 'user')
+        AnthropicProvider('key').complete(
+            'system', 'user', options=JSON_OPTIONS,
+        )
 
     assert exc_info.value.code == 'provider_model_unavailable'
     assert exc_info.value.http_status == 503
@@ -285,7 +333,7 @@ def test_groq_status_errors_are_safe(
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        GroqProvider('key').complete('system', 'user')
+        GroqProvider('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == expected_code
     assert exc_info.value.http_status == expected_status
@@ -312,7 +360,7 @@ def test_gemini_429_is_safe_rate_limit(monkeypatch, method):
     provider = GeminiProvider('key')
     with pytest.raises(ProviderError) as exc_info:
         if method == 'complete':
-            provider.complete('system', 'user')
+            provider.complete('system', 'user', options=JSON_OPTIONS)
         else:
             list(provider.stream('system', 'user'))
 
@@ -332,7 +380,7 @@ def test_retryable_status_retries_once_without_logging_vendor_body(
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        GroqProvider('key').complete('system', 'user')
+        GroqProvider('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_temporarily_unavailable'
     assert len(completions.calls) == 2
@@ -352,7 +400,7 @@ def test_connection_error_retries_once_then_becomes_safe(monkeypatch, caplog):
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        GroqProvider('key').complete('system', 'user')
+        GroqProvider('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_connection_failed'
     assert len(completions.calls) == 2
@@ -460,7 +508,7 @@ def test_http_402_is_safe_payment_required(
     provider = provider_factory(monkeypatch, error())
 
     with pytest.raises(ProviderError) as exc_info:
-        provider.complete('system', 'user')
+        provider.complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_payment_required'
     assert exc_info.value.http_status == 402
@@ -497,7 +545,7 @@ def test_sdk_timeout_is_not_misclassified_as_connection(
     monkeypatch.setattr(module_path, lambda api_key: client)
 
     with pytest.raises(ProviderError) as exc_info:
-        provider_type('key').complete('system', 'user')
+        provider_type('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_timeout'
     assert exc_info.value.http_status == 503
@@ -529,7 +577,7 @@ def test_gemini_transport_errors_are_safe(
     monkeypatch.setattr('generation.providers.gemini.time.sleep', lambda _wait: None)
 
     with pytest.raises(ProviderError) as exc_info:
-        GeminiProvider('key').complete('system', 'user')
+        GeminiProvider('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == expected_code
     assert exc_info.value.http_status == 503
@@ -551,7 +599,7 @@ def test_gemini_402_is_safe_payment_required(monkeypatch):
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        GeminiProvider('key').complete('system', 'user')
+        GeminiProvider('key').complete('system', 'user', options=JSON_OPTIONS)
 
     assert exc_info.value.code == 'provider_payment_required'
     assert exc_info.value.http_status == 402

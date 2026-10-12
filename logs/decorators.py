@@ -24,8 +24,8 @@ def log_llm_call(feature: str, sync: bool = False):
     支持两种返回形式：
       1. Generator（stream 路径）：末尾 yield UsageInfo sentinel，
          decorator 过滤 sentinel、透传 str chunk，迭代结束后写 LlmCallLog。
-      2. CompleteResult（complete 路径）：decorator 提取 text 返回给调用方，
-         用量信息写 LlmCallLog。
+      2. CompleteResult（complete 路径）：decorator 保持返回类型不变，
+         同时提取用量信息写 LlmCallLog。
 
     被装饰函数可接收 keyword argument：
       user:          Django User 对象或 None
@@ -73,7 +73,7 @@ def log_llm_call(feature: str, sync: bool = False):
                     latency_ms=latency, status='success',
                     error_message='', request_id=req_id, user_id=user_id,
                 )
-                return result.text  # 调用方只拿到文本
+                return result
             else:
                 # 旧同步路径（兼容保留，不应再有新调用走这里）
                 _log(

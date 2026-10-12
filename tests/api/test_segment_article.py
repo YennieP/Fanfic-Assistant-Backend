@@ -27,13 +27,18 @@ class RecordingProvider(FakeProvider):
         super().__init__(**kwargs)
         self.calls = []
 
-    def complete(self, system_prompt, user_prompt, max_tokens=2000):
+    def complete(self, system_prompt, user_prompt, *, options):
         self.calls.append({
             'system_prompt': system_prompt,
             'user_prompt': user_prompt,
-            'max_tokens': max_tokens,
+            'max_tokens': options.max_tokens,
+            'options': options,
         })
-        return super().complete(system_prompt, user_prompt, max_tokens)
+        return super().complete(
+            system_prompt,
+            user_prompt,
+            options=options,
+        )
 
 
 def _endpoint(article):
