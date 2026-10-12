@@ -22,7 +22,7 @@ def test_catalog_is_the_single_source_for_names_models_and_capabilities():
         'gemini': 'gemini-2.5-flash',
         'groq': 'openai/gpt-oss-120b',
         'cerebras': 'gpt-oss-120b',
-        'openrouter': 'meta-llama/llama-3.3-70b-instruct:free',
+        'openrouter': 'google/gemma-4-31b-it:free',
     }
     assert PROVIDER_CATALOG['gemini'].supports_video is True
     assert PROVIDER_CATALOG['gemini'].supports_embedding is True
