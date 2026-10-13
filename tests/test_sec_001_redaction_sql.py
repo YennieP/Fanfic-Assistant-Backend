@@ -113,9 +113,9 @@ def sec_001_postgres():
 
 def _seed_candidates(connection, candidate_count: int) -> list[str]:
     features = (
-        ['character_generate'] * min(candidate_count, 15)
-        + ['consistency_check'] * min(max(candidate_count - 15, 0), 4)
-        + ['segment_article'] * min(max(candidate_count - 19, 0), 3)
+        ['character_generate'] * min(candidate_count, 13)
+        + ['consistency_check'] * min(max(candidate_count - 13, 0), 4)
+        + ['segment_article'] * min(max(candidate_count - 17, 0), 3)
     )
     ids = [str(uuid.uuid4()) for _ in features]
     rows = [
@@ -123,7 +123,7 @@ def _seed_candidates(connection, candidate_count: int) -> list[str]:
             row_id,
             'error',
             datetime(2026, 10, 1, tzinfo=timezone.utc),
-            f'synthetic-vendor-error-{index % 10}',
+            f'synthetic-vendor-error-{index % 8}',
             feature,
             '',
         )
@@ -170,14 +170,14 @@ def test_sec_001_write_is_narrow_and_fails_closed():
         re.IGNORECASE,
     )
     assert "v_cutoff CONSTANT timestamptz := TIMESTAMPTZ '2026-10-08 21:29:16+00'" in executable
-    assert 'v_candidate_count <> 22' in executable
-    assert 'v_distinct_text_count <> 10' in executable
-    assert 'v_character_generate_count <> 15' in executable
+    assert 'v_candidate_count <> 20' in executable
+    assert 'v_distinct_text_count <> 8' in executable
+    assert 'v_character_generate_count <> 13' in executable
     assert 'v_consistency_check_count <> 4' in executable
     assert 'v_segment_article_count <> 3' in executable
     assert 'v_nonempty_model_count <> 0' in executable
     assert 'v_existing_redacted_count <> 0' in executable
-    assert 'v_updated_count <> 22' in executable
+    assert 'v_updated_count <> 20' in executable
     assert 'v_remaining_count <> 0' in executable
     assert executable.upper().count('RAISE EXCEPTION') == 3
     assert 'GET DIAGNOSTICS v_updated_count = ROW_COUNT' in executable
@@ -203,8 +203,8 @@ def test_sec_001_never_selects_original_error_text():
 
 
 def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
-    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=22)
-    safe_id = str(uuid.uuid4())
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=20)
+    safe_ids = [str(uuid.uuid4()) for _ in range(3)]
     post_cutoff_id = str(uuid.uuid4())
     with sec_001_postgres.cursor() as cursor:
         cursor.executemany(
@@ -215,10 +215,26 @@ def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
             ''',
             [
                 (
-                    safe_id,
+                    safe_ids[0],
                     'error',
                     datetime(2026, 10, 1, tzinfo=timezone.utc),
                     'provider_rate_limit',
+                    'character_generate',
+                    '',
+                ),
+                (
+                    safe_ids[1],
+                    'error',
+                    datetime(2026, 10, 1, tzinfo=timezone.utc),
+                    'Cerebras 本月免费额度（~10 亿 tokens）已用完，请下月再试',
+                    'character_generate',
+                    '',
+                ),
+                (
+                    safe_ids[2],
+                    'error',
+                    datetime(2026, 10, 1, tzinfo=timezone.utc),
+                    'OpenRouter 今日免费请求次数（200 次）已用完，请明天再试',
                     'character_generate',
                     '',
                 ),
@@ -236,7 +252,7 @@ def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
         write_statement, verification_statement = sqlparse.split(_sql())
         cursor.execute(write_statement)
         cursor.execute(verification_statement)
-        assert cursor.fetchone() == (22, 0)
+        assert cursor.fetchone() == (20, 0)
 
         cursor.execute(
             '''
@@ -249,13 +265,25 @@ def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
             ''',
             (candidate_ids,),
         )
-        assert cursor.fetchone() == (22,)
+        assert cursor.fetchone() == (20,)
 
         cursor.execute(
-            'SELECT error_message FROM logs_llmcalllog WHERE id = %s',
-            (safe_id,),
+            '''
+            SELECT COUNT(*)
+              FROM logs_llmcalllog
+             WHERE id = ANY(%s::uuid[])
+               AND error_message = ANY(%s::text[])
+            ''',
+            (
+                safe_ids,
+                [
+                    'provider_rate_limit',
+                    'Cerebras 本月免费额度（~10 亿 tokens）已用完，请下月再试',
+                    'OpenRouter 今日免费请求次数（200 次）已用完，请明天再试',
+                ],
+            ),
         )
-        assert cursor.fetchone() == ('provider_rate_limit',)
+        assert cursor.fetchone() == (3,)
         cursor.execute(
             'SELECT error_message FROM logs_llmcalllog WHERE id = %s',
             (post_cutoff_id,),
@@ -264,7 +292,7 @@ def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
 
 
 def test_sec_001_aborts_without_writes_when_precondition_fails(sec_001_postgres):
-    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=21)
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=19)
     write_statement = sqlparse.split(_sql())[0]
 
     with sec_001_postgres.cursor() as cursor:
@@ -285,13 +313,13 @@ def test_sec_001_aborts_without_writes_when_precondition_fails(sec_001_postgres)
             ''',
             (candidate_ids,),
         )
-        assert cursor.fetchone() == (0, 21)
+        assert cursor.fetchone() == (0, 19)
 
 
 def test_sec_001_rolls_back_partial_updates_when_update_guard_fails(
     sec_001_postgres,
 ):
-    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=22)
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=20)
     skipped_id = candidate_ids[0]
     write_statement = sqlparse.split(_sql())[0]
 
@@ -339,4 +367,4 @@ def test_sec_001_rolls_back_partial_updates_when_update_guard_fails(
             ''',
             (candidate_ids,),
         )
-        assert cursor.fetchone() == (0, 22)
+        assert cursor.fetchone() == (0, 20)
