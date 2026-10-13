@@ -1,0 +1,342 @@
+import os
+import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+import psycopg2
+import pytest
+import sqlparse
+from psycopg2 import sql as psycopg2_sql
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SQL_PATH = ROOT / 'scripts' / 'sec_001_redact_legacy_provider_errors.sql'
+
+EXPECTED_SAFE_VALUES = {
+    'generation_failed',
+    'no_api_key',
+    'provider_connection_failed',
+    'provider_key_invalid',
+    'provider_model_unavailable',
+    'provider_payment_required',
+    'provider_quota_daily',
+    'provider_quota_monthly',
+    'provider_rate_limit',
+    'provider_temporarily_unavailable',
+    'provider_timeout',
+    'stream interrupted before completion',
+    'historical_provider_error_redacted',
+    'Anthropic API Key 无效',
+    'Anthropic API Key 无效，请在设置页重新配置',
+    'Anthropic 请求频率超限',
+    'Anthropic 请求频率超限，请稍后再试',
+    'Cerebras API Key 无效',
+    'Cerebras API Key 无效，请在设置页重新配置',
+    'Cerebras 响应超时，请稍后重试',
+    'Cerebras 本月免费额度（~10 亿 tokens）已用完',
+    'Cerebras 本月免费额度（~10 亿 tokens）已用完，请下月再试',
+    'Gemini API Key 无效',
+    'Gemini 免费额度暂时耗尽，请稍后再试',
+    'Gemini 服务暂时不可用，请稍后再试',
+    'Groq API Key 无效',
+    'Groq API Key 无效，请在设置页重新配置',
+    'Groq 今日免费额度（100K tokens）已用完',
+    'Groq 今日免费额度（100K tokens）已用完，请明天再试',
+    'OpenRouter API Key 无效',
+    'OpenRouter API Key 无效，请在设置页重新配置',
+    'OpenRouter 今日免费请求次数（200 次）已用完',
+    'OpenRouter 今日免费请求次数（200 次）已用完，请明天再试',
+    'OpenRouter 响应超时，请稍后重试',
+}
+
+
+def _sql() -> str:
+    return SQL_PATH.read_text(encoding='utf-8')
+
+
+def _array_values(sql: str, marker: str) -> set[str]:
+    start = sql.index(marker) + len(marker)
+    array_start = sql.index('ARRAY[', start) + len('ARRAY[')
+    array_end = sql.index(']', array_start)
+    array_body = sql[array_start:array_end]
+    values = set(re.findall(r"'((?:[^']|'')*)'", array_body))
+    if 'v_redacted' in array_body:
+        values.add('historical_provider_error_redacted')
+    return values
+
+
+@pytest.fixture
+def sec_001_postgres():
+    dsn = os.environ.get('SEC001_TEST_DATABASE_URL')
+    if not dsn:
+        pytest.skip('SEC001_TEST_DATABASE_URL is required for PostgreSQL execution tests')
+
+    connection = psycopg2.connect(dsn)
+    connection.autocommit = True
+    schema = f'sec001_{uuid.uuid4().hex}'
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                psycopg2_sql.SQL('CREATE SCHEMA {}').format(
+                    psycopg2_sql.Identifier(schema),
+                ),
+            )
+            cursor.execute(
+                psycopg2_sql.SQL('SET search_path TO {}').format(
+                    psycopg2_sql.Identifier(schema),
+                ),
+            )
+            cursor.execute(
+                '''
+                CREATE TABLE logs_llmcalllog (
+                    id uuid PRIMARY KEY,
+                    status text NOT NULL,
+                    created_at timestamptz NOT NULL,
+                    error_message text NOT NULL,
+                    feature text NOT NULL,
+                    model text NOT NULL
+                )
+                ''',
+            )
+        yield connection
+    finally:
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                psycopg2_sql.SQL('DROP SCHEMA {} CASCADE').format(
+                    psycopg2_sql.Identifier(schema),
+                ),
+            )
+        connection.close()
+
+
+def _seed_candidates(connection, candidate_count: int) -> list[str]:
+    features = (
+        ['character_generate'] * min(candidate_count, 15)
+        + ['consistency_check'] * min(max(candidate_count - 15, 0), 4)
+        + ['segment_article'] * min(max(candidate_count - 19, 0), 3)
+    )
+    ids = [str(uuid.uuid4()) for _ in features]
+    rows = [
+        (
+            row_id,
+            'error',
+            datetime(2026, 10, 1, tzinfo=timezone.utc),
+            f'synthetic-vendor-error-{index % 10}',
+            feature,
+            '',
+        )
+        for index, (row_id, feature) in enumerate(zip(ids, features, strict=True))
+    ]
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            '''
+            INSERT INTO logs_llmcalllog
+                (id, status, created_at, error_message, feature, model)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ''',
+            rows,
+        )
+    return ids
+
+
+def test_sec_001_sql_has_one_atomic_write_statement_and_read_only_check():
+    statements = sqlparse.split(_sql())
+
+    assert len(statements) == 2
+    assert statements[0].lstrip().startswith('-- SEC-001')
+    assert 'DO $sec_001$' in statements[0]
+    assert statements[1].lstrip().startswith('-- Read-only post-write verification')
+    assert re.search(r'\bSELECT\b', statements[1], re.IGNORECASE)
+
+
+def test_sec_001_write_is_narrow_and_fails_closed():
+    write_statement = sqlparse.split(_sql())[0]
+    executable = sqlparse.format(write_statement, strip_comments=True)
+
+    assert executable.upper().count('UPDATE LOGS_LLMCALLLOG') == 1
+    assert re.search(
+        r'UPDATE\s+logs_llmcalllog\s+'
+        r'SET\s+error_message\s*=\s*v_redacted\s+'
+        r'WHERE\s+id\s*=\s*ANY\s*\(v_candidate_ids\)',
+        executable,
+        re.IGNORECASE,
+    )
+    assert 'RETURNING' not in executable.upper()
+    assert not re.search(
+        r'\b(DELETE|INSERT|TRUNCATE|ALTER|DROP|CREATE)\b',
+        executable,
+        re.IGNORECASE,
+    )
+    assert "v_cutoff CONSTANT timestamptz := TIMESTAMPTZ '2026-10-08 21:29:16+00'" in executable
+    assert 'v_candidate_count <> 22' in executable
+    assert 'v_distinct_text_count <> 10' in executable
+    assert 'v_character_generate_count <> 15' in executable
+    assert 'v_consistency_check_count <> 4' in executable
+    assert 'v_segment_article_count <> 3' in executable
+    assert 'v_nonempty_model_count <> 0' in executable
+    assert 'v_existing_redacted_count <> 0' in executable
+    assert 'v_updated_count <> 22' in executable
+    assert 'v_remaining_count <> 0' in executable
+    assert executable.upper().count('RAISE EXCEPTION') == 3
+    assert 'GET DIAGNOSTICS v_updated_count = ROW_COUNT' in executable
+
+
+def test_sec_001_safe_value_sets_are_complete_and_identical():
+    sql = _sql()
+    write_values = _array_values(sql, 'v_safe_values CONSTANT text[] := ')
+    verification_values = _array_values(
+        sql,
+        '-- Read-only post-write verification.',
+    )
+
+    assert write_values == EXPECTED_SAFE_VALUES
+    assert verification_values == EXPECTED_SAFE_VALUES
+
+
+def test_sec_001_never_selects_original_error_text():
+    sql = sqlparse.format(_sql(), strip_comments=True)
+
+    assert not re.search(r'\bSELECT\s+error_message\b', sql, re.IGNORECASE)
+    assert not re.search(r'\bRETURNING\b', sql, re.IGNORECASE)
+
+
+def test_sec_001_executes_atomically_on_postgresql(sec_001_postgres):
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=22)
+    safe_id = str(uuid.uuid4())
+    post_cutoff_id = str(uuid.uuid4())
+    with sec_001_postgres.cursor() as cursor:
+        cursor.executemany(
+            '''
+            INSERT INTO logs_llmcalllog
+                (id, status, created_at, error_message, feature, model)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ''',
+            [
+                (
+                    safe_id,
+                    'error',
+                    datetime(2026, 10, 1, tzinfo=timezone.utc),
+                    'provider_rate_limit',
+                    'character_generate',
+                    '',
+                ),
+                (
+                    post_cutoff_id,
+                    'error',
+                    datetime(2026, 10, 9, tzinfo=timezone.utc),
+                    'synthetic-post-cutoff-error',
+                    'character_generate',
+                    '',
+                ),
+            ],
+        )
+
+        write_statement, verification_statement = sqlparse.split(_sql())
+        cursor.execute(write_statement)
+        cursor.execute(verification_statement)
+        assert cursor.fetchone() == (22, 0)
+
+        cursor.execute(
+            '''
+            SELECT COUNT(*)
+              FROM logs_llmcalllog
+             WHERE id = ANY(%s::uuid[])
+               AND error_message = 'historical_provider_error_redacted'
+               AND status = 'error'
+               AND model = ''
+            ''',
+            (candidate_ids,),
+        )
+        assert cursor.fetchone() == (22,)
+
+        cursor.execute(
+            'SELECT error_message FROM logs_llmcalllog WHERE id = %s',
+            (safe_id,),
+        )
+        assert cursor.fetchone() == ('provider_rate_limit',)
+        cursor.execute(
+            'SELECT error_message FROM logs_llmcalllog WHERE id = %s',
+            (post_cutoff_id,),
+        )
+        assert cursor.fetchone() == ('synthetic-post-cutoff-error',)
+
+
+def test_sec_001_aborts_without_writes_when_precondition_fails(sec_001_postgres):
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=21)
+    write_statement = sqlparse.split(_sql())[0]
+
+    with sec_001_postgres.cursor() as cursor:
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            cursor.execute(write_statement)
+
+        cursor.execute(
+            '''
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE error_message = 'historical_provider_error_redacted'
+                ),
+                COUNT(*) FILTER (
+                    WHERE id = ANY(%s::uuid[])
+                      AND error_message LIKE 'synthetic-vendor-error-%%'
+                )
+              FROM logs_llmcalllog
+            ''',
+            (candidate_ids,),
+        )
+        assert cursor.fetchone() == (0, 21)
+
+
+def test_sec_001_rolls_back_partial_updates_when_update_guard_fails(
+    sec_001_postgres,
+):
+    candidate_ids = _seed_candidates(sec_001_postgres, candidate_count=22)
+    skipped_id = candidate_ids[0]
+    write_statement = sqlparse.split(_sql())[0]
+
+    with sec_001_postgres.cursor() as cursor:
+        cursor.execute(
+            psycopg2_sql.SQL(
+                '''
+                CREATE FUNCTION sec001_skip_one_update()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $trigger$
+                BEGIN
+                    IF OLD.id = {}::uuid THEN
+                        RETURN NULL;
+                    END IF;
+                    RETURN NEW;
+                END
+                $trigger$
+                ''',
+            ).format(psycopg2_sql.Literal(skipped_id)),
+        )
+        cursor.execute(
+            '''
+            CREATE TRIGGER sec001_skip_one_update
+            BEFORE UPDATE ON logs_llmcalllog
+            FOR EACH ROW
+            EXECUTE FUNCTION sec001_skip_one_update()
+            ''',
+        )
+
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            cursor.execute(write_statement)
+
+        cursor.execute(
+            '''
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE error_message = 'historical_provider_error_redacted'
+                ),
+                COUNT(*) FILTER (
+                    WHERE id = ANY(%s::uuid[])
+                      AND error_message LIKE 'synthetic-vendor-error-%%'
+                )
+              FROM logs_llmcalllog
+            ''',
+            (candidate_ids,),
+        )
+        assert cursor.fetchone() == (0, 22)
