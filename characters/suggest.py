@@ -356,12 +356,17 @@ def _parse_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
+        decoder = json.JSONDecoder()
+        candidates = []
+        for match in re.finditer(r'\{', text):
             try:
-                return json.loads(match.group())
+                value, end = decoder.raw_decode(text[match.start():])
             except json.JSONDecodeError:
-                pass
+                continue
+            if isinstance(value, dict):
+                candidates.append((match.start() + end, -match.start(), value))
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate[:2])[2]
     return {}
 
 
