@@ -8,8 +8,11 @@
 --     newest candidate observed by the read-only audit and before safe writes
 --     became the default-branch contract.
 --   * All counts and feature/model characteristics must still match the
---     read-only 2026-10-13 audit. Any mismatch raises an exception and rolls
---     back the entire DO statement.
+--     corrected read-only 2026-10-13 classification. The original audit's
+--     conservative count included two fixed safe quota messages; the
+--     production pre-write check identified and excluded them without
+--     returning message text. Any mismatch raises an exception and rolls back
+--     the entire DO statement.
 --   * Execute only after this exact revision is merged and the user separately
 --     authorizes the production write.
 
@@ -94,9 +97,9 @@ BEGIN
       FROM logs_llmcalllog
      WHERE error_message = v_redacted;
 
-    IF v_candidate_count <> 22
-       OR v_distinct_text_count <> 10
-       OR v_character_generate_count <> 15
+    IF v_candidate_count <> 20
+       OR v_distinct_text_count <> 8
+       OR v_character_generate_count <> 13
        OR v_consistency_check_count <> 4
        OR v_segment_article_count <> 3
        OR v_nonempty_model_count <> 0
@@ -125,11 +128,11 @@ BEGIN
 
     GET DIAGNOSTICS v_updated_count = ROW_COUNT;
 
-    IF v_updated_count <> 22 THEN
+    IF v_updated_count <> 20 THEN
         RAISE EXCEPTION USING
             ERRCODE = '23514',
             MESSAGE = format(
-                'SEC-001 aborted: expected 22 updates, got %s',
+                'SEC-001 aborted: expected 20 updates, got %s',
                 v_updated_count
             );
     END IF;
