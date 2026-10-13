@@ -376,16 +376,23 @@ def test_gemini_429_is_safe_rate_limit(monkeypatch, method):
     error = _gemini_client_error(429)
 
     class _Models:
+        calls = 0
+
         def generate_content(self, **kwargs):
+            self.calls += 1
             raise error
 
         def generate_content_stream(self, **kwargs):
+            self.calls += 1
             raise error
 
+    models = _Models()
+    sleeps = []
     monkeypatch.setattr(
         'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=_Models()),
+        lambda api_key: SimpleNamespace(models=models),
     )
+    monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
 
     provider = GeminiProvider('key')
     with pytest.raises(ProviderError) as exc_info:
@@ -396,7 +403,79 @@ def test_gemini_429_is_safe_rate_limit(monkeypatch, method):
 
     assert exc_info.value.code == 'provider_rate_limit'
     assert exc_info.value.http_status == 429
+    assert models.calls == 1
+    assert sleeps == []
     assert VENDOR_MARKER not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ('retry_error', 'expected_code'),
+    [
+        (_gemini_server_error(503), 'provider_temporarily_unavailable'),
+        (requests.Timeout(VENDOR_MARKER), 'provider_timeout'),
+        (requests.ConnectionError(VENDOR_MARKER), 'provider_connection_failed'),
+    ],
+)
+def test_gemini_complete_waits_only_between_retry_attempts(
+    monkeypatch, retry_error, expected_code,
+):
+
+    class _Models:
+        calls = 0
+
+        def generate_content(self, **kwargs):
+            self.calls += 1
+            raise retry_error
+
+    models = _Models()
+    sleeps = []
+    monkeypatch.setattr(
+        'generation.providers.gemini.genai.Client',
+        lambda api_key: SimpleNamespace(models=models),
+    )
+    monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
+
+    with pytest.raises(ProviderError) as exc_info:
+        GeminiProvider('key').complete('system', 'user', options=JSON_OPTIONS)
+
+    assert exc_info.value.code == expected_code
+    assert models.calls == 5
+    assert sleeps == [1, 2, 4, 4]
+
+
+@pytest.mark.parametrize(
+    ('retry_error', 'expected_code'),
+    [
+        (_gemini_server_error(503), 'provider_temporarily_unavailable'),
+        (requests.Timeout(VENDOR_MARKER), 'provider_timeout'),
+        (requests.ConnectionError(VENDOR_MARKER), 'provider_connection_failed'),
+    ],
+)
+def test_gemini_stream_waits_only_between_retry_attempts(
+    monkeypatch, retry_error, expected_code,
+):
+
+    class _Models:
+        calls = 0
+
+        def generate_content_stream(self, **kwargs):
+            self.calls += 1
+            raise retry_error
+
+    models = _Models()
+    sleeps = []
+    monkeypatch.setattr(
+        'generation.providers.gemini.genai.Client',
+        lambda api_key: SimpleNamespace(models=models),
+    )
+    monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
+
+    with pytest.raises(ProviderError) as exc_info:
+        list(GeminiProvider('key').stream('system', 'user'))
+
+    assert exc_info.value.code == expected_code
+    assert models.calls == 7
+    assert sleeps == [1, 2, 4, 8, 16, 32]
 
 
 def test_retryable_status_retries_once_without_logging_vendor_body(

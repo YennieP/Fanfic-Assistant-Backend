@@ -15,7 +15,9 @@ from .catalog import get_provider_definition
 
 logger = logging.getLogger(__name__)
 
-_RETRY_CODES = {503, 429}
+_RETRY_CODES = {503}
+_STREAM_ATTEMPTS = 7
+_COMPLETE_ATTEMPTS = 5
 
 
 def _client_error(error: ClientError) -> ProviderError:
@@ -106,7 +108,7 @@ class GeminiProvider(BaseProvider):
         stream_iter = None
         usage = None
 
-        for attempt in range(7):
+        for attempt in range(_STREAM_ATTEMPTS):
             try:
                 stream_iter = client.models.generate_content_stream(
                     model=self.MODEL,
@@ -128,27 +130,31 @@ class GeminiProvider(BaseProvider):
                 raise _client_error(e) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
-                    wait = min(2 ** attempt, 32)
-                    logger.warning(
-                        'Gemini status=%s model=%s attempt=%d; retrying in %ds',
-                        e.code, self.MODEL, attempt + 1, wait,
-                    )
-                    time.sleep(wait)
                     last_error = e
                     stream_iter = None
+                    if attempt < _STREAM_ATTEMPTS - 1:
+                        wait = min(2 ** attempt, 32)
+                        logger.warning(
+                            'Gemini status=%s model=%s attempt=%d; '
+                            'retrying in %ds',
+                            e.code, self.MODEL, attempt + 1, wait,
+                        )
+                        time.sleep(wait)
                 else:
                     raise _server_error(e) from None
             except (requests.Timeout, requests.ConnectionError) as e:
-                wait = min(2 ** attempt, 32)
-                logger.warning(
-                    'Gemini transport=%s model=%s attempt=%d; retrying in %ds',
-                    type(e).__name__, self.MODEL, attempt + 1, wait,
-                )
-                time.sleep(wait)
                 last_error = e
                 stream_iter = None
+                if attempt < _STREAM_ATTEMPTS - 1:
+                    wait = min(2 ** attempt, 32)
+                    logger.warning(
+                        'Gemini transport=%s model=%s attempt=%d; '
+                        'retrying in %ds',
+                        type(e).__name__, self.MODEL, attempt + 1, wait,
+                    )
+                    time.sleep(wait)
         else:
-            # 7 次重试全部失败
+            # 7 次请求全部失败
             if last_error and getattr(last_error, 'code', None) == 429:
                 raise ProviderError(
                     'Gemini 请求频率或额度已受限，请稍后重试',
@@ -164,7 +170,7 @@ class GeminiProvider(BaseProvider):
             ) from None
 
         if stream_iter is None:
-            # 7 次重试全部失败（last_error 已在上方 raise，此处不可达）
+            # 所有请求失败时已在上方 raise，此处不可达。
             return
 
         # ── 阶段二：消费剩余 chunk，不再重试 ────────────────────────────────
@@ -204,7 +210,7 @@ class GeminiProvider(BaseProvider):
         config = types.GenerateContentConfig(**config_kwargs)
 
         last_error = None
-        for attempt in range(5):
+        for attempt in range(_COMPLETE_ATTEMPTS):
             try:
                 response = client.models.generate_content(
                     model=self.MODEL,
@@ -252,23 +258,27 @@ class GeminiProvider(BaseProvider):
                 raise _client_error(e) from None
             except ServerError as e:
                 if e.code in _RETRY_CODES:
-                    wait = min(2 ** attempt, 4)
-                    logger.warning(
-                        'Gemini status=%s model=%s attempt=%d; retrying in %ds',
-                        e.code, self.MODEL, attempt + 1, wait,
-                    )
-                    time.sleep(wait)
                     last_error = e
+                    if attempt < _COMPLETE_ATTEMPTS - 1:
+                        wait = min(2 ** attempt, 4)
+                        logger.warning(
+                            'Gemini status=%s model=%s attempt=%d; '
+                            'retrying in %ds',
+                            e.code, self.MODEL, attempt + 1, wait,
+                        )
+                        time.sleep(wait)
                 else:
                     raise _server_error(e) from None
             except (requests.Timeout, requests.ConnectionError) as e:
-                wait = min(2 ** attempt, 4)
-                logger.warning(
-                    'Gemini transport=%s model=%s attempt=%d; retrying in %ds',
-                    type(e).__name__, self.MODEL, attempt + 1, wait,
-                )
-                time.sleep(wait)
                 last_error = e
+                if attempt < _COMPLETE_ATTEMPTS - 1:
+                    wait = min(2 ** attempt, 4)
+                    logger.warning(
+                        'Gemini transport=%s model=%s attempt=%d; '
+                        'retrying in %ds',
+                        type(e).__name__, self.MODEL, attempt + 1, wait,
+                    )
+                    time.sleep(wait)
 
         if last_error and getattr(last_error, 'code', None) == 429:
             raise ProviderError(
