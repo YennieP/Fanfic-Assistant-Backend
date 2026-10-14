@@ -38,6 +38,12 @@ def resolve_active_provider(user) -> ResolvedProvider:
             code='provider_model_unavailable',
             http_status=503,
         ) from None
+    if not definition.enabled:
+        raise ProviderError(
+            '该服务商已暂时下线，请选择其他服务商',
+            code=definition.disabled_reason or 'provider_disabled',
+            http_status=503,
+        ) from None
 
     try:
         key_obj = UserProviderKey.objects.get(

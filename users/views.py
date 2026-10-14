@@ -51,6 +51,23 @@ def _get_saved_key(user, provider) -> UserProviderKey | None:
     ).first()
 
 
+def _require_enabled_provider(provider: str):
+    definition = get_provider_definition(provider)
+    if definition is None:
+        raise ProviderError(
+            '当前配置的 provider 不可用',
+            code='provider_model_unavailable',
+            http_status=503,
+        )
+    if not definition.enabled:
+        raise ProviderError(
+            '该服务商已暂时下线，请选择其他服务商',
+            code=definition.disabled_reason or 'provider_disabled',
+            http_status=503,
+        )
+    return definition
+
+
 def _record_verification(
     key: UserProviderKey,
     provider: str,
@@ -122,11 +139,12 @@ class LLMConfigView(APIView):
         if not api_key:
             return Response({'error': 'API Key 不能为空'}, status=400)
 
+        definition = _require_enabled_provider(provider)
+
         # Provider network I/O must finish before the short database write.
         # A failed candidate never replaces the saved key or active provider.
         result = verify_provider_api_key(provider, api_key)
         encrypted = encrypt_key(api_key)
-        definition = get_provider_definition(provider)
         with transaction.atomic():
             UserProviderKey.objects.update_or_create(
                 user=request.user,
@@ -157,6 +175,8 @@ class LLMConfigView(APIView):
                 {'error': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}'},
                 status=400
             )
+
+        _require_enabled_provider(provider)
 
         key = _get_saved_key(request.user, provider)
         if key is None:
@@ -189,6 +209,8 @@ class LLMConfigVerifyView(APIView):
                 {'error': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}'},
                 status=400,
             )
+
+        _require_enabled_provider(provider)
 
         key = _get_saved_key(request.user, provider)
         if key is None:

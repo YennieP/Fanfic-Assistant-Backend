@@ -45,7 +45,7 @@ class LLMConfigSerializer(serializers.ModelSerializer):
       }
     }
     """
-    active_provider = serializers.CharField(source='provider', read_only=True)
+    active_provider = serializers.SerializerMethodField()
     providers = serializers.SerializerMethodField()
 
     class Meta:
@@ -63,11 +63,20 @@ class LLMConfigSerializer(serializers.ModelSerializer):
         }
 
     @staticmethod
+    def get_active_provider(obj):
+        definition = PROVIDER_CATALOG.get(obj.provider)
+        if definition is None or not definition.enabled:
+            return None
+        return obj.provider
+
+    @staticmethod
     def _provider_info(provider_name, key):
         definition = PROVIDER_CATALOG[provider_name]
         return {
             'has_key': key is not None,
             'model': definition.model,
+            'enabled': definition.enabled,
+            'disabled_reason': definition.disabled_reason,
             'capabilities': _provider_capabilities(provider_name),
             'verification_status': (
                 key.verification_status if key else None

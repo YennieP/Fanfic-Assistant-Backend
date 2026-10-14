@@ -26,6 +26,13 @@ def test_catalog_is_the_single_source_for_names_models_and_capabilities():
     }
     assert PROVIDER_CATALOG['gemini'].supports_video is True
     assert PROVIDER_CATALOG['gemini'].supports_embedding is True
+    assert PROVIDER_CATALOG['openrouter'].enabled is False
+    assert PROVIDER_CATALOG['openrouter'].disabled_reason == 'provider_disabled'
+    assert all(
+        definition.enabled
+        for name, definition in PROVIDER_CATALOG.items()
+        if name != 'openrouter'
+    )
     assert all(
         not definition.supports_video and not definition.supports_embedding
         for name, definition in PROVIDER_CATALOG.items()
@@ -73,6 +80,28 @@ def test_resolver_rejects_unknown_stored_provider_before_key_lookup(user_factory
         resolve_active_provider(user)
 
     assert exc_info.value.code == 'provider_model_unavailable'
+    assert exc_info.value.http_status == 503
+
+
+@pytest.mark.django_db
+def test_resolver_rejects_disabled_provider_before_key_decryption(
+    make_user_with_key, monkeypatch,
+):
+    from generation.provider_service import resolve_active_provider
+
+    user = make_user_with_key(provider='openrouter')
+
+    def unexpected_decryption(_encrypted):
+        raise AssertionError('disabled provider must fail before key decryption')
+
+    monkeypatch.setattr(
+        'generation.provider_service.decrypt_key', unexpected_decryption,
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        resolve_active_provider(user)
+
+    assert exc_info.value.code == 'provider_disabled'
     assert exc_info.value.http_status == 503
 
 

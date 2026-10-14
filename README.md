@@ -18,7 +18,7 @@ Django REST API for [Fanfic Assistant](https://github.com/YennieP/Fanfic-Assista
 - Python 3.12, Django 6, Django REST Framework
 - SimpleJWT, django-cors-headers, django-rest-framework-camel-case
 - PostgreSQL + pgvector（生产与完整风格检索）；SQLite（基础本地开发与测试）
-- Anthropic, Gemini, Groq, Cerebras, OpenRouter
+- Anthropic, Gemini, Groq, Cerebras；OpenRouter 集成与已保存 Key 保留，但当前由 catalog 暂时下线
 - Gunicorn + WhiteNoise，部署于 Railway
 - pytest, pytest-django, factory-boy, pytest-cov
 
@@ -77,7 +77,7 @@ Windows：
 | Health | `/health/`, `/health/live/` | 数据库就绪检查与不访问外部依赖的进程存活检查；无需鉴权 |
 | Auth | `/api/auth/register/`, `/api/auth/me/` | 注册与当前用户 |
 | JWT | `/api/token/`, `/api/token/refresh/` | 获取与刷新 token |
-| LLM config | `/api/auth/llm-config/`, `/api/auth/llm-config/verify/` | 候选 Key 真实验证后保存、已存 Key 显式验证与当前 provider；不返回明文 Key |
+| LLM config | `/api/auth/llm-config/`, `/api/auth/llm-config/verify/` | 候选 Key 真实验证后保存、已存 Key 显式验证与当前 provider；响应包含 catalog `enabled` / `disabledReason`，不返回明文 Key |
 | Characters | `/api/characters/` | BaseCard CRUD |
 | AU Mods | `/api/characters/{character_id}/mods/` | 角色下的 AU Mod CRUD |
 | Translation | `/api/characters/{canonical_id}/translate/`, `/versions/` | 多语言版本创建与查询 |
@@ -95,8 +95,8 @@ Windows：
 ## 关键运行边界
 
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
-- 当前文本模型为 Anthropic `claude-sonnet-4-6`、Gemini `gemini-2.5-flash`、Groq `openai/gpt-oss-120b`、Cerebras `gpt-oss-120b`、OpenRouter `google/gemma-4-31b-it:free`。OpenRouter 固定免费模型不会动态路由到未披露模型或自动改用付费模型；当前公开限制为每分钟 20 次，每日限额取决于 OpenRouter 账户累计购买的 credits，详情以官方限额说明为准。独立的 `openrouter-model-monitor` 定时/手动 workflow 使用无 Key 公开目录检查该模型仍存在、文本价格仍为零且仍支持 `response_format`；它不在普通 push/PR 上运行。
-- 保存候选 provider Key 和切换已有 provider 都会先执行一次低输出预算的真实 text completion；验证失败不会覆盖旧 Key或改变 active provider。`POST /api/auth/llm-config/verify/` 可显式复查已存 Key，GET 和页面加载不会自动调用 provider 或消耗额度。响应只返回是否已存 Key、catalog 模型、最近一次安全验证状态/时间及请求和实际模型，不返回明文 Key。
+- 当前启用的文本模型为 Anthropic `claude-sonnet-4-6`、Gemini `gemini-2.5-flash`、Groq `openai/gpt-oss-120b`、Cerebras `gpt-oss-120b`。OpenRouter 集成仍固定 `google/gemma-4-31b-it:free`，但因免费上游连续跨日 429 已通过 provider catalog 暂时禁用；不会动态路由到未披露模型或自动改用付费模型。独立的 `openrouter-model-monitor` 定时/手动 workflow 仍使用无 Key 公开目录检查该模型存在、文本价格为零且支持 `response_format`，为后续恢复提供信号；它不在普通 push/PR 上运行。
+- 保存候选 provider Key 和切换已有 provider 都会先执行一次低输出预算的真实 text completion；验证失败不会覆盖旧 Key或改变 active provider。`POST /api/auth/llm-config/verify/` 可显式复查已存 Key，GET 和页面加载不会自动调用 provider 或消耗额度。响应只返回是否已存 Key、catalog 模型、`enabled` / `disabledReason`、最近一次安全验证状态/时间及请求和实际模型，不返回明文 Key。catalog 中禁用的 provider 会在 Key 解密和外部网络调用前以 `provider_disabled` 拒绝保存、验证、切换和实际 LLM 调用；已有 Key 与验证历史原样保留，不需要 migration。
 - GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、402、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。Cerebras 402 单独表示账户没有可用额度或计费权限，不得误报为 Key 无效或短暂服务故障。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。

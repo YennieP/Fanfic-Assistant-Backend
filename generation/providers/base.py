@@ -52,6 +52,7 @@ class ProviderError(Exception):
       provider_payment_required      — 账户没有可用额度或计费权限（402）
       provider_rate_limit             — 请求频率或额度受限（429）
       provider_model_unavailable      — 当前配置的模型不存在或不可用（404）
+      provider_disabled               — 服务商被项目暂时下线
       provider_timeout                — provider 超时
       provider_connection_failed      — provider 连接失败
       provider_temporarily_unavailable — 其他安全归一化的上游错误

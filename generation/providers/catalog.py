@@ -9,6 +9,8 @@ class ProviderDefinition:
     model: str
     supports_video: bool = False
     supports_embedding: bool = False
+    enabled: bool = True
+    disabled_reason: str | None = None
 
 
 PROVIDER_CATALOG = MappingProxyType({
@@ -38,6 +40,8 @@ PROVIDER_CATALOG = MappingProxyType({
         name='openrouter',
         provider_class='generation.providers.openrouter.OpenRouterProvider',
         model='google/gemma-4-31b-it:free',
+        enabled=False,
+        disabled_reason='provider_disabled',
     ),
 })
 
