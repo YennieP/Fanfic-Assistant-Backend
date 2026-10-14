@@ -43,6 +43,8 @@ def test_get_reports_saved_state_without_calling_provider(
     assert info == {
         'has_key': True,
         'model': 'gemini-2.5-flash',
+        'enabled': True,
+        'disabled_reason': None,
         'capabilities': {'video': True, 'embedding': True},
         'verification_status': None,
         'verification_checked_at': None,
@@ -52,6 +54,72 @@ def test_get_reports_saved_state_without_calling_provider(
     rendered = response.json()['providers']['gemini']
     assert rendered['verificationStatus'] is None
     assert rendered['verificationCheckedAt'] is None
+
+
+@pytest.mark.django_db
+def test_get_preserves_disabled_provider_key_but_reports_no_active_provider(
+    api_client, make_user_with_key,
+):
+    user = make_user_with_key(provider='openrouter')
+    _authenticate(api_client, user)
+
+    response = api_client.get(CONFIG_URL)
+
+    assert response.status_code == 200
+    assert response.data['active_provider'] is None
+    info = response.data['providers']['openrouter']
+    assert info['has_key'] is True
+    assert info['model'] == 'google/gemma-4-31b-it:free'
+    assert info['enabled'] is False
+    assert info['disabled_reason'] == 'provider_disabled'
+    assert UserProviderKey.objects.filter(
+        user=user, provider='openrouter',
+    ).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('method', 'url', 'payload'),
+    [
+        ('post', CONFIG_URL, {
+            'provider': 'openrouter',
+            'api_key': 'replacement-key',
+        }),
+        ('patch', CONFIG_URL, {'provider': 'openrouter'}),
+        ('post', VERIFY_URL, {'provider': 'openrouter'}),
+    ],
+)
+def test_disabled_provider_rejects_config_actions_without_provider_io(
+    api_client, make_user_with_key, monkeypatch, method, url, payload,
+):
+    user = make_user_with_key(provider='gemini')
+    openrouter_key = UserProviderKey.objects.create(
+        user=user,
+        provider='openrouter',
+        api_key_encrypted=encrypt_key('stored-openrouter-key'),
+        verification_status='provider_rate_limit',
+    )
+    original_ciphertext = openrouter_key.api_key_encrypted
+    _authenticate(api_client, user)
+
+    def unexpected_verification(*_args, **_kwargs):
+        raise AssertionError('disabled provider must not make provider calls')
+
+    monkeypatch.setattr(
+        'users.views.verify_provider_api_key', unexpected_verification,
+    )
+
+    response = getattr(api_client, method)(url, payload, format='json')
+
+    assert response.status_code == 503
+    assert response.data == {
+        'code': 'provider_disabled',
+        'detail': '该服务商已暂时下线，请选择其他服务商',
+    }
+    assert UserLLMConfig.objects.get(user=user).provider == 'gemini'
+    openrouter_key.refresh_from_db()
+    assert openrouter_key.api_key_encrypted == original_ciphertext
+    assert openrouter_key.verification_status == 'provider_rate_limit'
 
 
 @pytest.mark.django_db
