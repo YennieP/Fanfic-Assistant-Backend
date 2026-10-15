@@ -10,7 +10,7 @@ from django.core.cache import cache
 from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
 from users.encryption import decrypt_key
 from .prompt import build_prompt
-from .provider_service import resolve_active_provider
+from .provider_service import resolve_active_provider, resolve_provider
 from .providers.base import ProviderError
 from logs.decorators import log_llm_call
 from logs.context import request_id_var
@@ -194,8 +194,17 @@ class GenerateStreamView(APIView):
                 content_type='text/event-stream',
             )
 
+        provider_override = (
+            request.data.get('provider_override')
+            or request.data.get('providerOverride')
+        )
+
         try:
-            resolved_provider = resolve_active_provider(request.user)
+            resolved_provider = (
+                resolve_provider(request.user, provider_override)
+                if provider_override
+                else resolve_active_provider(request.user)
+            )
         except ProviderError as exc:
             return StreamingHttpResponse(
                 _error_stream(exc.code),

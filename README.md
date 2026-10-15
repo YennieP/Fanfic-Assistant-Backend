@@ -83,9 +83,9 @@ Windows：
 | Translation | `/api/characters/{canonical_id}/translate/`, `/versions/` | 多语言版本创建与查询 |
 | Relationships | `/api/relationships/` | 关系实体与 nested memberships |
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
-| Generation | `/api/generate/stream/` | SSE 流式生成 |
+| Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
-| Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；segment 会先完成并验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
+| Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；segment 可选 `providerOverride`，并会先完成、验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
 | Fragments | `/api/examples/fragments/` | 片段列表/创建、详情、infer-tags、confirm |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
@@ -95,6 +95,7 @@ Windows：
 ## 关键运行边界
 
 - `POST /api/generate/stream/` 返回 `text/event-stream`，事件类型包括 `chunk`、`done` 和 `error`；错误事件使用机器可读 `code`。
+- `POST /api/generate/stream/` 与 `POST /api/examples/articles/{article_id}/segment/` 接受可选 `providerOverride`。未提供时继续使用当前 active provider；提供时只使用当前用户为该 catalog-enabled provider 保存的 Key，且只对本次请求生效，不读取其他用户的 Key、不修改 active provider。未知、已下线或未保存 Key 的 provider 会在外部调用前 fail closed。
 - 当前启用的文本模型为 Gemini `gemini-2.5-flash` 与 Groq `openai/gpt-oss-120b`，两者已在 2026-10-15 通过生产“只验证、不切换”确认可用。Anthropic `claude-sonnet-4-6` 因尚无有效 Key、Cerebras `gpt-oss-120b` 因当前账户没有可用额度，暂时由 provider catalog 禁用；OpenRouter `google/gemma-4-31b-it:free` 继续因免费上游连续跨日 429 保持禁用。三个 provider 的集成、模型定义、已保存 Key 与验证历史均保留，恢复前分别需要新的真实验证与标准切割证据；不会动态路由到未披露模型或自动改用付费模型。独立的 `openrouter-model-monitor` 定时/手动 workflow 仍使用无 Key 公开目录检查该模型存在、文本价格为零且支持 `response_format`，为后续恢复提供信号；它不在普通 push/PR 上运行。
 - 保存候选 provider Key 和切换已有 provider 都会先执行一次低输出预算的真实 text completion；验证失败不会覆盖旧 Key或改变 active provider。`POST /api/auth/llm-config/verify/` 可显式复查已存 Key，GET 和页面加载不会自动调用 provider 或消耗额度。响应只返回是否已存 Key、catalog 模型、`enabled` / `disabledReason`、最近一次安全验证状态/时间及请求和实际模型，不返回明文 Key。catalog 中禁用的 provider 会在 Key 解密和外部网络调用前以 `provider_disabled` 拒绝保存、验证、切换和实际 LLM 调用；已有 Key 与验证历史原样保留，不需要 migration。
 - GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、402、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。Cerebras 402 单独表示账户没有可用额度或计费权限，不得误报为 Key 无效或短暂服务故障。
