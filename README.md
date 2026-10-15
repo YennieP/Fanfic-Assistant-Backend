@@ -81,7 +81,7 @@ Windows：
 | Characters | `/api/characters/` | BaseCard CRUD |
 | AU Mods | `/api/characters/{character_id}/mods/` | 角色下的 AU Mod CRUD |
 | Translation | `/api/characters/{canonical_id}/translate/`, `/versions/` | 多语言版本创建与查询 |
-| Relationships | `/api/relationships/` | 关系实体与 nested memberships |
+| Relationships | `/api/relationships/` | 关系实体与 nested memberships；membership PATCH 支持标签、红线、称呼及 `inheritExclude` |
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
@@ -101,6 +101,7 @@ Windows：
 - GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、402、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。Cerebras 402 单独表示账户没有可用额度或计费权限，不得误报为 Key 无效或短暂服务故障。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。
+- 生成与评估会先把 BaseCard、可选 AU Mod 和当前角色实际参与的 active relationships 解析为同一个 `EffectiveCharacterContext`。AU/relationship 的 `inheritExclude` 即使没有追加项也生效；空白或损坏列表项会被忽略；更高特异性来源按 ID 或规范化内容去重。关系按参与人数升序、同人数按创建时间和 UUID 稳定排序。两条调用路径共享有效数据，但 generation 保留称呼与创作模板，evaluation 保留独立 judge 模板。当前稳定顺序不是同级语义冲突的用户仲裁，后者由跨系统 ToDo `ARC-009` 跟踪。
 - 文章自动切割要求 provider 复制输入中标注的绝对行号，`start` / `end` 均为 inclusive；每个非空行必须恰好覆盖一次，空白行可以并入相邻片段或省略，但纯空白片段、重叠和越出当前 gap 的范围均会被拒绝。编号后文本按包含换行符的 3000 字符或 100 行上限分块，以先达到者为准；接近硬上限时优先退回最近 20 行内的空白行边界，避免人为切断相邻情节。单个超长原文行不会从行内拆开，以免破坏绝对行号协议。当前不猜测性修正 EOF 多一行等越界结果。
 - 文章自动切割当前使用 4000 输出 token 上限；生产容量验收确认 2000 会在接近 chunk 上限的高行密度输入上耗尽并截断 JSON。该值是调用上限，不代表每次固定消耗 4000 token。
 - Gemini 同步调用会向应用控制台日志记录容量指标（model、finish reason、prompt/completion/total/unattributed token 和输出预算），不记录 prompt、模型正文或 API Key；`unattributed` 只表示 SDK 未分类的 token，不直接等同于 thinking token。

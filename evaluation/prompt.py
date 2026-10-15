@@ -1,3 +1,7 @@
+from characters.effective_context import (
+    EffectiveCharacterContext,
+    compose_effective_character_context,
+)
 from characters.models import BaseCard, AUMod
 
 
@@ -22,17 +26,16 @@ def build_judge_prompt(
     character: BaseCard,
     au_mod: AUMod | None,
     generated_text: str,
-    active_rel_contexts: list | None = None,
+    effective_context: EffectiveCharacterContext | None = None,
 ) -> tuple[str, str]:
     """
     返回 (system_prompt, user_prompt)
 
-    active_rel_contexts: [(Relationship, RelationshipMembership | None), ...]
-      与 generation/prompt.py 格式保持一致。
-      Judge 注入关系基调、性格切面、关系红线，略去称呼规则（生成专用，评估不需要）。
-      为 None 或空列表时行为与原实现完全一致（向后兼容）。
+    Judge 与 generation 消费同一个 EffectiveCharacterContext，但保留自己的展示模板，
+    包括略去生成专用的称呼规则。
     """
-    char_summary = _build_char_summary(character, au_mod, active_rel_contexts)
+    context = effective_context or compose_effective_character_context(character, au_mod)
+    char_summary = _build_char_summary(character, au_mod, context)
     user_prompt = f'【角色设定】\n{char_summary}\n\n【待评估文本】\n{generated_text}'
     return JUDGE_SYSTEM, user_prompt
 
@@ -40,7 +43,7 @@ def build_judge_prompt(
 def _build_char_summary(
     character: BaseCard,
     au_mod: AUMod | None,
-    active_rel_contexts: list | None = None,
+    effective_context: EffectiveCharacterContext,
 ) -> str:
     lines = [f'角色名：{character.name}']
 
@@ -51,13 +54,9 @@ def _build_char_summary(
         lines.append(f'性别代词：{character.gender_pronoun}')
 
     # 性格标签（合并并应用 inherit_exclude）
-    labels = list(character.quick_labels or [])
-    if au_mod and au_mod.quick_labels:
-        exclude = (au_mod.inherit_exclude or {}).get('quick_labels', [])
-        labels = [l for l in labels if l.get('id') not in exclude]
-        labels += au_mod.quick_labels
+    labels = effective_context.quick_labels
     if labels:
-        lines.append(f'性格标签：{"、".join(l["content"] for l in labels)}')
+        lines.append(f'性格标签：{"、".join(item.content for item in labels)}')
 
     # 核心价值观（强信号：行动方向违反最珍视的东西是最直接可观测的崩人设）
     if character.core_values:
@@ -74,15 +73,11 @@ def _build_char_summary(
             lines.append(f'  · {exp["content"]}')
 
     # 人设红线（最关键的评估依据）
-    fb = list(character.forbidden_behaviors or [])
-    if au_mod and au_mod.forbidden_behaviors:
-        exclude = (au_mod.inherit_exclude or {}).get('forbidden_behaviors', [])
-        fb = [f for f in fb if f.get('id') not in exclude]
-        fb += au_mod.forbidden_behaviors
-    if fb:
+    forbidden_behaviors = effective_context.forbidden_behaviors
+    if forbidden_behaviors:
         lines.append('\n人设红线（违反即扣分）：')
-        for f in fb:
-            lines.append(f'  ✕ {f["content"]}')
+        for item in forbidden_behaviors:
+            lines.append(f'  ✕ {item.content}')
 
     # 行为模式（最多 3 条，足够给 judge 参考）
     patterns = character.behavioral_patterns or []
@@ -120,27 +115,25 @@ def _build_char_summary(
     # 关系上下文（结构性缺口修复）
     # 注入：关系基调 + 该角色在此关系中的性格切面 + 关系专属红线
     # 略去：称呼规则（生成专用，judge 评估不需要）
-    if active_rel_contexts:
-        for rel, membership in active_rel_contexts:
-            lines.append('\n生成时激活的关系设定（评估时作为参照）：')
-            if rel.overall_tone:
-                lines.append(f'  关系基调：{rel.overall_tone}')
-
-            if membership is None:
+    if effective_context.relationships:
+        for relationship in effective_context.relationships:
+            if not (
+                relationship.overall_tone
+                or relationship.quick_labels
+                or relationship.forbidden_behaviors
+            ):
                 continue
+            lines.append('\n生成时激活的关系设定（评估时作为参照）：')
+            if relationship.overall_tone:
+                lines.append(f'  关系基调：{relationship.overall_tone}')
 
-            if membership.quick_labels:
-                label_str = '、'.join(
-                    l['content'] for l in membership.quick_labels
-                    if isinstance(l, dict) and l.get('content')
-                )
-                if label_str:
-                    lines.append(f'  {character.name} 在此关系中：{label_str}')
+            if relationship.quick_labels:
+                label_str = '、'.join(item.content for item in relationship.quick_labels)
+                lines.append(f'  {character.name} 在此关系中：{label_str}')
 
-            if membership.forbidden_behaviors:
+            if relationship.forbidden_behaviors:
                 lines.append('  关系专属红线：')
-                for fb_item in membership.forbidden_behaviors:
-                    content = fb_item.get('content', str(fb_item)) if isinstance(fb_item, dict) else str(fb_item)
-                    lines.append(f'    ✕ {content}')
+                for item in relationship.forbidden_behaviors:
+                    lines.append(f'    ✕ {item.content}')
 
     return '\n'.join(lines)

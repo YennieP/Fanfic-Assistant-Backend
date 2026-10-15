@@ -1,3 +1,7 @@
+from characters.effective_context import (
+    EffectiveCharacterContext,
+    compose_effective_character_context,
+)
 from characters.models import BaseCard, AUMod
 
 
@@ -6,8 +10,8 @@ def build_prompt(
     au_mod: AUMod | None,
     scene_input: dict,
     style_fragments: list | None = None,
-    active_rel_contexts: list | None = None,
     output_language: str = 'zh',
+    effective_context: EffectiveCharacterContext | None = None,
 ) -> tuple[str, str]:
     """
     返回 (system_prompt, user_prompt)
@@ -16,11 +20,11 @@ def build_prompt(
       默认 'zh'，向后兼容。
       前端写作页「输出语言」下拉传入，优先于 LLM 自行判断（实测不注入时会输出繁体中文）。
 
-    active_rel_contexts: [(Relationship, RelationshipMembership | None), ...]
-      来自 generation/views.py 的 _get_active_rel_contexts()
-      空列表时行为与 Phase 1 完全一致（向后兼容）
+    effective_context 由 characters.effective_context 统一解析；为空时仅合成
+    BaseCard 与 AU Mod，方便不经过 API view 的调用方保持兼容。
     """
-    system = _build_system(character, au_mod, style_fragments, active_rel_contexts, output_language)
+    context = effective_context or compose_effective_character_context(character, au_mod)
+    system = _build_system(character, au_mod, context, style_fragments, output_language)
     user = _build_user(scene_input, output_language)
     return system, user
 
@@ -28,8 +32,8 @@ def build_prompt(
 def _build_system(
     character: BaseCard,
     au_mod: AUMod | None,
+    effective_context: EffectiveCharacterContext,
     style_fragments: list | None = None,
-    active_rel_contexts: list | None = None,
     output_language: str = 'zh',
 ) -> str:
     if character.gender and character.gender != 'other':
@@ -77,13 +81,9 @@ def _build_system(
         if character.mbti_notes:
             lines.append(f'MBTI说明：{character.mbti_notes}')
 
-    labels = list(character.quick_labels or [])
-    if au_mod and au_mod.quick_labels:
-        exclude = (au_mod.inherit_exclude or {}).get('quick_labels', [])
-        labels = [l for l in labels if l.get('id') not in exclude]
-        labels += au_mod.quick_labels
+    labels = effective_context.quick_labels
     if labels:
-        lines.append(f'性格标签：{"、".join(l["content"] for l in labels)}')
+        lines.append(f'性格标签：{"、".join(item.content for item in labels)}')
 
     if character.core_values:
         lines.append(f'核心价值观：{"、".join(v["content"] for v in character.core_values)}')
@@ -113,15 +113,11 @@ def _build_system(
                     entry += f'（内心：{r_int}）'
                 lines.append(f'  · {entry}')
 
-    fb = list(character.forbidden_behaviors or [])
-    if au_mod and au_mod.forbidden_behaviors:
-        exclude = (au_mod.inherit_exclude or {}).get('forbidden_behaviors', [])
-        fb = [f for f in fb if f.get('id') not in exclude]
-        fb += au_mod.forbidden_behaviors
-    if fb:
+    forbidden_behaviors = effective_context.forbidden_behaviors
+    if forbidden_behaviors:
         lines.append('\n【人设红线（绝对不能违反）】')
-        for f in fb:
-            lines.append(f'  ✕ {f["content"]}')
+        for item in forbidden_behaviors:
+            lines.append(f'  ✕ {item.content}')
 
     if character.default_state:
         lines.append(f'\n日常基调：{character.default_state}')
@@ -154,39 +150,35 @@ def _build_system(
             lines.append(f'当前处境：{au_mod.role_current_situation}')
 
     # ── Scaffold: 关系实体注入（phase1.md §9）──────────────────────────────
-    # active_rel_contexts 为空时此段落完全不存在，Phase 1 行为不变
+    # 空的关系上下文不产生空标题。
     # 注入位置：AU设定之后、风格示例之前
-    if active_rel_contexts:
-        for rel, membership in active_rel_contexts:
-            lines.append(f'\n【激活的关系设定】')
-            if rel.overall_tone:
-                lines.append(f'关系基调：{rel.overall_tone}')
-
-            if membership is None:
+    if effective_context.relationships:
+        for relationship in effective_context.relationships:
+            if not (
+                relationship.overall_tone
+                or relationship.quick_labels
+                or relationship.forbidden_behaviors
+                or relationship.nicknames_for_others
+            ):
                 continue
+            lines.append(f'\n【激活的关系设定】')
+            if relationship.overall_tone:
+                lines.append(f'关系基调：{relationship.overall_tone}')
 
             # 该角色在此关系中的性格切面
-            if membership.quick_labels:
-                label_str = '、'.join(
-                    l['content'] for l in membership.quick_labels
-                    if isinstance(l, dict) and l.get('content')
-                )
-                if label_str:
-                    lines.append(f'{character.name} 在此关系中：{label_str}')
+            if relationship.quick_labels:
+                label_str = '、'.join(item.content for item in relationship.quick_labels)
+                lines.append(f'{character.name} 在此关系中：{label_str}')
 
             # 关系专属红线
-            if membership.forbidden_behaviors:
+            if relationship.forbidden_behaviors:
                 lines.append('关系专属红线：')
-                for fb in membership.forbidden_behaviors:
-                    content = fb.get('content', str(fb)) if isinstance(fb, dict) else str(fb)
-                    lines.append(f'  ✕ {content}')
+                for item in relationship.forbidden_behaviors:
+                    lines.append(f'  ✕ {item.content}')
 
             # 称呼规则
-            if membership.nicknames_for_others:
-                for nick in membership.nicknames_for_others:
-                    if isinstance(nick, dict) and nick.get('calls') and nick.get('as'):
-                        as_names = '、'.join(nick['as'])
-                        lines.append(f'称呼 {nick["calls"]} 为：{as_names}')
+            for calls, names in relationship.nicknames_for_others:
+                lines.append(f'称呼 {calls} 为：{"、".join(names)}')
     # ── 关系注入结束 ────────────────────────────────────────────────────────
 
     # ── Phase 2：风格示例注入 ────────────────────────────────────────────────

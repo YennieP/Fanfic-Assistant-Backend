@@ -7,7 +7,8 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django.core.cache import cache
 
-from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
+from characters.effective_context import build_effective_character_context
+from characters.models import BaseCard, AUMod
 from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .provider_service import resolve_active_provider, resolve_provider
@@ -145,25 +146,6 @@ def _get_fragment_by_id(fragment_id: str, user) -> object | None:
         return None
 
 
-def _get_active_rel_contexts(character: BaseCard, active_relationship_ids: list, user) -> list:
-    if not active_relationship_ids:
-        return []
-    try:
-        rels = list(Relationship.objects.filter(
-            id__in=active_relationship_ids, owner=user,
-        ))
-        membership_map = {
-            m.relationship_id: m
-            for m in RelationshipMembership.objects.filter(
-                relationship__in=rels, character=character,
-            )
-        }
-        return [(rel, membership_map.get(rel.id)) for rel in rels]
-    except Exception:
-        logger.exception('Failed to fetch relationship contexts')
-        return []
-
-
 def _fragment_preview(fragment, max_len: int = 120) -> str:
     text = fragment.text or ''
     if len(text) <= max_len:
@@ -254,13 +236,14 @@ class GenerateStreamView(APIView):
             style_fragments = all_candidates[:1]
         # ── 候选面板逻辑结束 ──────────────────────────────────────────────────
 
-        active_rel_contexts = _get_active_rel_contexts(
-            character, active_relationship_ids, request.user
+        effective_context = build_effective_character_context(
+            character, au_mod, active_relationship_ids,
         )
 
         system_prompt, user_prompt = build_prompt(
-            character, au_mod, scene_input, style_fragments, active_rel_contexts,
+            character, au_mod, scene_input, style_fragments,
             output_language=output_language,
+            effective_context=effective_context,
         )
 
         # 中间件会在 StreamingHttpResponse 返回后 reset ContextVar，而真正的
@@ -289,7 +272,7 @@ class GenerateStreamView(APIView):
                     'generationId': str(generation_id),
                     'styleInjected': len(style_fragments) > 0,
                     'styleFragmentCount': len(style_fragments),
-                    'activeRelationships': [str(rel.id) for rel, _ in active_rel_contexts],
+                    'activeRelationships': list(effective_context.active_relationship_ids),
                     'currentFragmentId': str(style_fragments[0].id) if style_fragments else None,
                     # 包含 tags 供前端提取 scene_type / emotion 等维度展示
                     'candidates': [_fragment_to_candidate(f) for f in all_candidates],
