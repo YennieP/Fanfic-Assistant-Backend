@@ -73,6 +73,28 @@ def test_override_cannot_use_another_users_saved_key(make_user_with_key):
 
 
 @pytest.mark.django_db
+def test_override_rejects_non_string_provider_as_unavailable_before_decryption(
+    make_user_with_key, monkeypatch,
+):
+    from generation.provider_service import resolve_provider
+
+    user = make_user_with_key(provider='gemini')
+
+    def unexpected_decryption(_encrypted):
+        raise AssertionError('invalid override must fail before key decryption')
+
+    monkeypatch.setattr(
+        'generation.provider_service.decrypt_key', unexpected_decryption,
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        resolve_provider(user, ['groq'])  # type: ignore[arg-type]
+
+    assert exc_info.value.code == 'provider_model_unavailable'
+    assert UserLLMConfig.objects.get(user=user).provider == 'gemini'
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize('provider', ['anthropic', 'cerebras', 'openrouter'])
 def test_override_rejects_disabled_provider_before_key_decryption(
     make_user_with_key, monkeypatch, provider,

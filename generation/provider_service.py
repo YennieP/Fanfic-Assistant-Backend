@@ -34,7 +34,7 @@ def resolve_active_provider(user) -> ResolvedProvider:
     return resolve_provider(user, provider_name)
 
 
-def resolve_provider(user, provider_name: str) -> ResolvedProvider:
+def resolve_provider(user, provider_name: object) -> ResolvedProvider:
     """Resolve one enabled provider using only the request user's saved key.
 
     This function intentionally does not read or write ``UserLLMConfig``. It
@@ -42,7 +42,11 @@ def resolve_provider(user, provider_name: str) -> ResolvedProvider:
     selected and verified a fallback provider.
     """
 
-    definition = get_provider_definition(provider_name)
+    definition = (
+        get_provider_definition(provider_name)
+        if isinstance(provider_name, str)
+        else None
+    )
     if definition is None:
         raise ProviderError(
             '当前配置的 provider 不可用',
