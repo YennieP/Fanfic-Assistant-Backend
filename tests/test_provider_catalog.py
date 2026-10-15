@@ -26,12 +26,20 @@ def test_catalog_is_the_single_source_for_names_models_and_capabilities():
     }
     assert PROVIDER_CATALOG['gemini'].supports_video is True
     assert PROVIDER_CATALOG['gemini'].supports_embedding is True
-    assert PROVIDER_CATALOG['openrouter'].enabled is False
-    assert PROVIDER_CATALOG['openrouter'].disabled_reason == 'provider_disabled'
+    disabled_providers = {'anthropic', 'cerebras', 'openrouter'}
+    assert {
+        name
+        for name, definition in PROVIDER_CATALOG.items()
+        if not definition.enabled
+    } == disabled_providers
+    assert all(
+        PROVIDER_CATALOG[name].disabled_reason == 'provider_disabled'
+        for name in disabled_providers
+    )
     assert all(
         definition.enabled
         for name, definition in PROVIDER_CATALOG.items()
-        if name != 'openrouter'
+        if name not in disabled_providers
     )
     assert all(
         not definition.supports_video and not definition.supports_embedding
@@ -84,12 +92,13 @@ def test_resolver_rejects_unknown_stored_provider_before_key_lookup(user_factory
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize('provider', ['anthropic', 'cerebras', 'openrouter'])
 def test_resolver_rejects_disabled_provider_before_key_decryption(
-    make_user_with_key, monkeypatch,
+    make_user_with_key, monkeypatch, provider,
 ):
     from generation.provider_service import resolve_active_provider
 
-    user = make_user_with_key(provider='openrouter')
+    user = make_user_with_key(provider=provider)
 
     def unexpected_decryption(_encrypted):
         raise AssertionError('disabled provider must fail before key decryption')

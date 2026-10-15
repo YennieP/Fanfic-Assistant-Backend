@@ -18,6 +18,8 @@ PROVIDER_CATALOG = MappingProxyType({
         name='anthropic',
         provider_class='generation.providers.anthropic.AnthropicProvider',
         model='claude-sonnet-4-6',
+        enabled=False,
+        disabled_reason='provider_disabled',
     ),
     'gemini': ProviderDefinition(
         name='gemini',
@@ -35,6 +37,8 @@ PROVIDER_CATALOG = MappingProxyType({
         name='cerebras',
         provider_class='generation.providers.cerebras.CerebrasProvider',
         model='gpt-oss-120b',
+        enabled=False,
+        disabled_reason='provider_disabled',
     ),
     'openrouter': ProviderDefinition(
         name='openrouter',

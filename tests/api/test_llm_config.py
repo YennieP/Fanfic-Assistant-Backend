@@ -57,49 +57,55 @@ def test_get_reports_saved_state_without_calling_provider(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('provider', 'model'),
+    [
+        ('anthropic', 'claude-sonnet-4-6'),
+        ('cerebras', 'gpt-oss-120b'),
+        ('openrouter', 'google/gemma-4-31b-it:free'),
+    ],
+)
 def test_get_preserves_disabled_provider_key_but_reports_no_active_provider(
-    api_client, make_user_with_key,
+    api_client, make_user_with_key, provider, model,
 ):
-    user = make_user_with_key(provider='openrouter')
+    user = make_user_with_key(provider=provider)
     _authenticate(api_client, user)
 
     response = api_client.get(CONFIG_URL)
 
     assert response.status_code == 200
     assert response.data['active_provider'] is None
-    info = response.data['providers']['openrouter']
+    info = response.data['providers'][provider]
     assert info['has_key'] is True
-    assert info['model'] == 'google/gemma-4-31b-it:free'
+    assert info['model'] == model
     assert info['enabled'] is False
     assert info['disabled_reason'] == 'provider_disabled'
     assert UserProviderKey.objects.filter(
-        user=user, provider='openrouter',
+        user=user, provider=provider,
     ).exists()
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ('method', 'url', 'payload'),
+    ('method', 'url'),
     [
-        ('post', CONFIG_URL, {
-            'provider': 'openrouter',
-            'api_key': 'replacement-key',
-        }),
-        ('patch', CONFIG_URL, {'provider': 'openrouter'}),
-        ('post', VERIFY_URL, {'provider': 'openrouter'}),
+        ('post', CONFIG_URL),
+        ('patch', CONFIG_URL),
+        ('post', VERIFY_URL),
     ],
 )
+@pytest.mark.parametrize('provider', ['anthropic', 'cerebras', 'openrouter'])
 def test_disabled_provider_rejects_config_actions_without_provider_io(
-    api_client, make_user_with_key, monkeypatch, method, url, payload,
+    api_client, make_user_with_key, monkeypatch, method, url, provider,
 ):
     user = make_user_with_key(provider='gemini')
-    openrouter_key = UserProviderKey.objects.create(
+    disabled_key = UserProviderKey.objects.create(
         user=user,
-        provider='openrouter',
-        api_key_encrypted=encrypt_key('stored-openrouter-key'),
+        provider=provider,
+        api_key_encrypted=encrypt_key(f'stored-{provider}-key'),
         verification_status='provider_rate_limit',
     )
-    original_ciphertext = openrouter_key.api_key_encrypted
+    original_ciphertext = disabled_key.api_key_encrypted
     _authenticate(api_client, user)
 
     def unexpected_verification(*_args, **_kwargs):
@@ -109,6 +115,9 @@ def test_disabled_provider_rejects_config_actions_without_provider_io(
         'users.views.verify_provider_api_key', unexpected_verification,
     )
 
+    payload = {'provider': provider}
+    if method == 'post' and url == CONFIG_URL:
+        payload['api_key'] = 'replacement-key'
     response = getattr(api_client, method)(url, payload, format='json')
 
     assert response.status_code == 503
@@ -117,9 +126,9 @@ def test_disabled_provider_rejects_config_actions_without_provider_io(
         'detail': '该服务商已暂时下线，请选择其他服务商',
     }
     assert UserLLMConfig.objects.get(user=user).provider == 'gemini'
-    openrouter_key.refresh_from_db()
-    assert openrouter_key.api_key_encrypted == original_ciphertext
-    assert openrouter_key.verification_status == 'provider_rate_limit'
+    disabled_key.refresh_from_db()
+    assert disabled_key.api_key_encrypted == original_ciphertext
+    assert disabled_key.verification_status == 'provider_rate_limit'
 
 
 @pytest.mark.django_db
