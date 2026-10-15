@@ -10,6 +10,7 @@ import pytest
 from django.urls import reverse
 from rest_framework.test import APIRequestFactory, force_authenticate
 
+from characters.models import Relationship, RelationshipMembership
 from generation.providers.base import ProviderError
 from generation.views import GenerateStreamView
 from logs.context import request_id_var
@@ -18,6 +19,16 @@ from logs.models import LlmCallLog, VectorSearchLog
 from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
 from users.models import UserLLMConfig
+
+
+class CapturingStreamProvider(FakeProvider):
+    def __init__(self):
+        super().__init__(chunks=['result'])
+        self.system_prompts = []
+
+    def stream(self, system_prompt, user_prompt):
+        self.system_prompts.append(system_prompt)
+        return super().stream(system_prompt, user_prompt)
 
 
 def _parse_sse(response):
@@ -72,6 +83,57 @@ def test_generate_stream_success_contract(api_client, make_user_with_key, monkey
 
     # 契约 3：不应出现 error 事件。
     assert not any(e.get('type') == 'error' for e in events)
+
+
+@pytest.mark.django_db
+def test_generate_stream_uses_explicit_relationship_resolution(
+    api_client, make_user_with_key, monkeypatch,
+):
+    provider = CapturingStreamProvider()
+    monkeypatch.setattr(
+        'generation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(name='gemini', instance=provider),
+    )
+
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user, name='陈默')
+    partner = BaseCardFactory(owner=user, name='林宇')
+    omitted = Relationship.objects.create(owner=user, overall_tone='应被排除')
+    RelationshipMembership.objects.create(
+        relationship=omitted,
+        character=character,
+        quick_labels=[{'id': 'omit', 'content': '不应进入生成'}],
+    )
+    RelationshipMembership.objects.create(relationship=omitted, character=partner)
+    selected = Relationship.objects.create(owner=user, overall_tone='明确采用')
+    RelationshipMembership.objects.create(
+        relationship=selected,
+        character=character,
+        quick_labels=[{'id': 'selected', 'content': '进入生成'}],
+    )
+    RelationshipMembership.objects.create(relationship=selected, character=partner)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        reverse('generate-stream'),
+        data={
+            # 使用前端真实 camelCase 载荷，覆盖 parser 和显式子集语义。
+            'characterId': str(character.id),
+            'sceneInput': {'location': '咖啡馆', 'intent': '交换情报'},
+            'activeRelationshipIds': [str(omitted.id), str(selected.id)],
+            'resolvedRelationshipIds': [str(selected.id)],
+        },
+        format='json',
+    )
+    events = _parse_sse(response)
+
+    assert response.status_code == 200
+    assert len(provider.system_prompts) == 1
+    assert '明确采用' in provider.system_prompts[0]
+    assert '进入生成' in provider.system_prompts[0]
+    assert '应被排除' not in provider.system_prompts[0]
+    assert '不应进入生成' not in provider.system_prompts[0]
+    assert events[-1]['activeRelationships'] == [str(selected.id)]
 
 
 @pytest.mark.django_db

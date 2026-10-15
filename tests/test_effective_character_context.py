@@ -134,6 +134,95 @@ def test_relationship_order_deduplication_and_ownership_are_deterministic(user_f
 
 
 @pytest.mark.django_db
+def test_explicit_relationship_resolution_is_an_active_subset_and_only_reorders_peers():
+    character = BaseCardFactory()
+    owner = character.owner
+    partner = BaseCardFactory(owner=owner)
+    third = BaseCardFactory(owner=owner)
+
+    pair_a = Relationship.objects.create(owner=owner, overall_tone='关系 A')
+    RelationshipMembership.objects.create(
+        relationship=pair_a,
+        character=character,
+        quick_labels=[{'id': 'a', 'content': 'A 标签'}],
+    )
+    RelationshipMembership.objects.create(relationship=pair_a, character=partner)
+
+    pair_b = Relationship.objects.create(owner=owner, overall_tone='关系 B')
+    RelationshipMembership.objects.create(
+        relationship=pair_b,
+        character=character,
+        quick_labels=[{'id': 'b', 'content': 'B 标签'}],
+    )
+    RelationshipMembership.objects.create(relationship=pair_b, character=partner)
+
+    group = Relationship.objects.create(owner=owner, overall_tone='群体关系')
+    RelationshipMembership.objects.create(
+        relationship=group,
+        character=character,
+        quick_labels=[{'id': 'group', 'content': '群体标签'}],
+    )
+    RelationshipMembership.objects.create(relationship=group, character=partner)
+    RelationshipMembership.objects.create(relationship=group, character=third)
+
+    reordered = build_effective_character_context(
+        character,
+        None,
+        [pair_a.id, pair_b.id, group.id],
+        # 群体关系故意放在最前；跨级仍必须是一对一优先，同级则采用 B → A。
+        [group.id, pair_b.id, pair_a.id],
+    )
+    assert reordered.active_relationship_ids == (
+        str(pair_b.id),
+        str(pair_a.id),
+        str(group.id),
+    )
+    generation_system, _ = build_prompt(
+        character,
+        None,
+        {'location': '会议室', 'intent': '协商'},
+        effective_context=reordered,
+    )
+    _, evaluation_user = build_judge_prompt(
+        character,
+        None,
+        '她最后同意了。',
+        effective_context=reordered,
+    )
+    for prompt in (generation_system, evaluation_user):
+        assert '关系按优先级从高到低排列' in prompt
+        assert prompt.index('关系 B') < prompt.index('关系 A') < prompt.index('群体关系')
+
+    selected = build_effective_character_context(
+        character,
+        None,
+        [pair_a.id, pair_b.id, group.id],
+        [pair_b.id],
+    )
+    assert selected.active_relationship_ids == (str(pair_b.id),)
+
+    empty = build_effective_character_context(
+        character,
+        None,
+        [pair_a.id, pair_b.id, group.id],
+        [],
+    )
+    assert empty.relationships == ()
+
+    # resolved 中不在自动激活集合里的 ID 必须 fail closed。
+    not_active = Relationship.objects.create(owner=owner, overall_tone='未激活')
+    RelationshipMembership.objects.create(relationship=not_active, character=character)
+    RelationshipMembership.objects.create(relationship=not_active, character=partner)
+    ignored = build_effective_character_context(
+        character,
+        None,
+        [pair_a.id],
+        [not_active.id],
+    )
+    assert ignored.relationships == ()
+
+
+@pytest.mark.django_db
 def test_generation_and_evaluation_golden_prompts_share_effective_context():
     character = BaseCardFactory(
         name='陈默',

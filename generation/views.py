@@ -199,6 +199,11 @@ class GenerateStreamView(APIView):
         # 兜底同时支持 snake_case 和 camelCase（取决于 DRF parser 配置）
         output_language = request.data.get('output_language') or request.data.get('outputLanguage', 'zh')
         active_relationship_ids = request.data.get('active_relationship_ids', [])
+        resolved_relationship_ids = (
+            request.data.get('resolved_relationship_ids') or []
+            if 'resolved_relationship_ids' in request.data
+            else None
+        )
         forced_fragment_id = request.data.get('forced_fragment_id')
 
         if not character_id:
@@ -237,7 +242,10 @@ class GenerateStreamView(APIView):
         # ── 候选面板逻辑结束 ──────────────────────────────────────────────────
 
         effective_context = build_effective_character_context(
-            character, au_mod, active_relationship_ids,
+            character,
+            au_mod,
+            active_relationship_ids,
+            resolved_relationship_ids,
         )
 
         system_prompt, user_prompt = build_prompt(

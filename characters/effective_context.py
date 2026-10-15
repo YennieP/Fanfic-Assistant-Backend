@@ -235,6 +235,7 @@ def _valid_relationship_ids(values: object) -> list[UUID]:
 def _relationship_layers(
     character: BaseCard,
     active_relationship_ids: object,
+    resolved_relationship_ids: object | None = None,
 ) -> list[_RelationshipLayer]:
     relationship_ids = _valid_relationship_ids(active_relationship_ids)
     if not relationship_ids:
@@ -263,6 +264,38 @@ def _relationship_layers(
         for relationship in relationships
         if relationship.id in memberships
     ]
+
+    if resolved_relationship_ids is not None:
+        # resolved 是客户端从自动激活集合中明确仲裁出的精确有序子集。
+        # 不属于 active 的 ID（包括越权或当前角色未参与）一律 fail closed。
+        active_ids = set(relationship_ids)
+        resolved_ids = [
+            relationship_id
+            for relationship_id in _valid_relationship_ids(
+                resolved_relationship_ids,
+            )
+            if relationship_id in active_ids
+        ]
+        resolved_rank = {
+            relationship_id: index
+            for index, relationship_id in enumerate(resolved_ids)
+        }
+        layers = [
+            layer for layer in layers
+            if layer.relationship.id in resolved_rank
+        ]
+        # 用户顺序仅在同特异性内生效；人数更少的关系始终优先。
+        return sorted(
+            layers,
+            key=lambda layer: (
+                layer.participant_count,
+                resolved_rank[layer.relationship.id],
+                layer.relationship.created_at,
+                str(layer.relationship.id),
+            ),
+        )
+
+    # 旧客户端没有 resolved 字段时继续使用 ARC-005 的确定性默认值：
     # 参与人数越少，激活条件越窄、特异性越高；同特异性不依赖 updated_at。
     return sorted(
         layers,
@@ -278,9 +311,14 @@ def build_effective_character_context(
     character: BaseCard,
     au_mod: AUMod | None,
     active_relationship_ids: object,
+    resolved_relationship_ids: object | None = None,
 ) -> EffectiveCharacterContext:
     return compose_effective_character_context(
         character,
         au_mod,
-        _relationship_layers(character, active_relationship_ids),
+        _relationship_layers(
+            character,
+            active_relationship_ids,
+            resolved_relationship_ids,
+        ),
     )

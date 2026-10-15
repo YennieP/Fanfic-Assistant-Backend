@@ -42,16 +42,27 @@ def _generation_log(user):
     )
 
 
-def _post_evaluation(api_client, character, generation_log, relationship_ids):
+def _post_evaluation(
+    api_client,
+    character,
+    generation_log,
+    relationship_ids,
+    resolved_relationship_ids=None,
+):
+    data = {
+        # 使用前端真实 camelCase 载荷，覆盖 CamelCaseJSONParser 路径。
+        'generationId': str(generation_log.generation_id),
+        'generatedText': '她没有退让。',
+        'characterId': str(character.id),
+        'activeRelationshipIds': [str(rel_id) for rel_id in relationship_ids],
+    }
+    if resolved_relationship_ids is not None:
+        data['resolvedRelationshipIds'] = [
+            str(rel_id) for rel_id in resolved_relationship_ids
+        ]
     return api_client.post(
         '/api/evaluation/score/',
-        data={
-            # 使用前端真实 camelCase 载荷，覆盖 CamelCaseJSONParser 路径。
-            'generationId': str(generation_log.generation_id),
-            'generatedText': '她没有退让。',
-            'characterId': str(character.id),
-            'activeRelationshipIds': [str(rel_id) for rel_id in relationship_ids],
-        },
+        data=data,
         format='json',
     )
 
@@ -84,6 +95,25 @@ def test_evaluation_injects_owned_relationship_context(
         quick_labels=[{'id': 'rel-label', 'content': '保护欲强'}],
         forbidden_behaviors=[{'id': 'rel-fb', 'content': '公开羞辱对方'}],
     )
+    partner = BaseCardFactory(owner=user)
+    RelationshipMembership.objects.create(
+        relationship=relationship,
+        character=partner,
+    )
+
+    omitted_relationship = Relationship.objects.create(
+        owner=user,
+        overall_tone='用户明确排除的同级关系',
+    )
+    RelationshipMembership.objects.create(
+        relationship=omitted_relationship,
+        character=character,
+        quick_labels=[{'id': 'omit', 'content': '不应进入评估'}],
+    )
+    RelationshipMembership.objects.create(
+        relationship=omitted_relationship,
+        character=partner,
+    )
 
     # 即使客户端传入其他用户的关系 ID，
     # 也不得注入当前用户的 judge prompt。
@@ -102,7 +132,8 @@ def test_evaluation_injects_owned_relationship_context(
         api_client,
         character,
         generation_log,
-        [relationship.id, other_relationship.id],
+        [relationship.id, omitted_relationship.id, other_relationship.id],
+        [relationship.id],
     )
 
     assert response.status_code == 200
@@ -114,6 +145,8 @@ def test_evaluation_injects_owned_relationship_context(
     assert '陈默 在此关系中：保护欲强' in user_prompt
     assert '关系专属红线：' in user_prompt
     assert '✕ 公开羞辱对方' in user_prompt
+    assert '用户明确排除的同级关系' not in user_prompt
+    assert '不应进入评估' not in user_prompt
     assert '不应泄露的其他用户关系' not in user_prompt
 
 
