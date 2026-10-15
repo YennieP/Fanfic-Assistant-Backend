@@ -7,7 +7,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from characters.models import BaseCard, AUMod, Relationship, RelationshipMembership
+from characters.effective_context import build_effective_character_context
+from characters.models import BaseCard, AUMod
 from logs.models import LlmCallLog
 from logs.decorators import log_llm_call
 from generation.provider_service import resolve_active_provider
@@ -56,33 +57,6 @@ def _parse_judge_response(result_text: str) -> tuple[int, str]:
     raise ValueError(f'无法解析 judge 响应：{clean[:300]}')
 
 
-def _get_active_rel_contexts(
-    character: BaseCard, active_relationship_ids: list[str]
-) -> list[tuple]:
-    """
-    与 generation/views.py 的 _get_active_rel_contexts 逻辑保持一致。
-    返回 [(Relationship, RelationshipMembership | None), ...]
-    仅查询属于 character.owner 且 id 在 active_relationship_ids 中的关系实体。
-    """
-    if not active_relationship_ids:
-        return []
-
-    relationships = Relationship.objects.filter(
-        id__in=active_relationship_ids,
-        owner=character.owner,
-    ).prefetch_related('memberships')
-
-    result = []
-    for rel in relationships:
-        try:
-            membership = rel.memberships.get(character=character)
-        except RelationshipMembership.DoesNotExist:
-            membership = None
-        result.append((rel, membership))
-
-    return result
-
-
 class EvaluateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -119,11 +93,13 @@ class EvaluateView(APIView):
         resolved_provider = resolve_active_provider(request.user)
         provider = resolved_provider.instance
 
-        # 查询关系上下文（空列表时 build_judge_prompt 行为与原实现完全一致）
-        active_rel_contexts = _get_active_rel_contexts(character, active_relationship_ids)
+        effective_context = build_effective_character_context(
+            character, au_mod, active_relationship_ids,
+        )
 
         system_prompt, user_prompt = build_judge_prompt(
-            character, au_mod, generated_text, active_rel_contexts
+            character, au_mod, generated_text,
+            effective_context=effective_context,
         )
 
         judge_id = uuid.uuid4()
