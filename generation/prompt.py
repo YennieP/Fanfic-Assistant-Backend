@@ -152,16 +152,26 @@ def _build_system(
     # ── Scaffold: 关系实体注入（phase1.md §9）──────────────────────────────
     # 空的关系上下文不产生空标题。
     # 注入位置：AU设定之后、风格示例之前
-    if effective_context.relationships:
-        for relationship in effective_context.relationships:
-            if not (
-                relationship.overall_tone
-                or relationship.quick_labels
-                or relationship.forbidden_behaviors
-                or relationship.nicknames_for_others
-            ):
-                continue
-            lines.append(f'\n【激活的关系设定】')
+    visible_relationships = [
+        relationship
+        for relationship in effective_context.relationships
+        if (
+            relationship.overall_tone
+            or relationship.quick_labels
+            or relationship.forbidden_behaviors
+            or relationship.nicknames_for_others
+        )
+    ]
+    if visible_relationships:
+        lines.append('\n【激活的关系设定】')
+        if len(visible_relationships) > 1:
+            lines.append(
+                '以下关系按优先级从高到低排列；若要求无法同时满足，'
+                '优先遵守靠前关系，并保留其余不冲突信息。'
+            )
+        for priority, relationship in enumerate(visible_relationships, 1):
+            if len(visible_relationships) > 1:
+                lines.append(f'\n关系优先级 {priority}：')
             if relationship.overall_tone:
                 lines.append(f'关系基调：{relationship.overall_tone}')
 

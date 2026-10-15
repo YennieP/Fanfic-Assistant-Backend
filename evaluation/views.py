@@ -67,6 +67,11 @@ class EvaluateView(APIView):
         au_mod_id = request.data.get('au_mod_id')
         # 新增：接收生成时激活的关系实体 ID 列表，用于 judge 注入关系上下文
         active_relationship_ids = request.data.get('active_relationship_ids') or []
+        resolved_relationship_ids = (
+            request.data.get('resolved_relationship_ids') or []
+            if 'resolved_relationship_ids' in request.data
+            else None
+        )
 
         if not all([generation_id, generated_text, character_id]):
             return Response({'error': '缺少必填参数'}, status=400)
@@ -94,7 +99,10 @@ class EvaluateView(APIView):
         provider = resolved_provider.instance
 
         effective_context = build_effective_character_context(
-            character, au_mod, active_relationship_ids,
+            character,
+            au_mod,
+            active_relationship_ids,
+            resolved_relationship_ids,
         )
 
         system_prompt, user_prompt = build_judge_prompt(

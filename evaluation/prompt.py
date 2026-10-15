@@ -115,15 +115,25 @@ def _build_char_summary(
     # 关系上下文（结构性缺口修复）
     # 注入：关系基调 + 该角色在此关系中的性格切面 + 关系专属红线
     # 略去：称呼规则（生成专用，judge 评估不需要）
-    if effective_context.relationships:
-        for relationship in effective_context.relationships:
-            if not (
-                relationship.overall_tone
-                or relationship.quick_labels
-                or relationship.forbidden_behaviors
-            ):
-                continue
-            lines.append('\n生成时激活的关系设定（评估时作为参照）：')
+    visible_relationships = [
+        relationship
+        for relationship in effective_context.relationships
+        if (
+            relationship.overall_tone
+            or relationship.quick_labels
+            or relationship.forbidden_behaviors
+        )
+    ]
+    if visible_relationships:
+        lines.append('\n生成时激活的关系设定（评估时作为参照）：')
+        if len(visible_relationships) > 1:
+            lines.append(
+                '以下关系按优先级从高到低排列；若要求无法同时满足，'
+                '评估时以靠前关系为准，并兼顾其余不冲突信息。'
+            )
+        for priority, relationship in enumerate(visible_relationships, 1):
+            if len(visible_relationships) > 1:
+                lines.append(f'\n  关系优先级 {priority}：')
             if relationship.overall_tone:
                 lines.append(f'  关系基调：{relationship.overall_tone}')
 
