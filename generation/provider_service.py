@@ -31,6 +31,17 @@ def resolve_active_provider(user) -> ResolvedProvider:
             http_status=400,
         ) from None
 
+    return resolve_provider(user, provider_name)
+
+
+def resolve_provider(user, provider_name: str) -> ResolvedProvider:
+    """Resolve one enabled provider using only the request user's saved key.
+
+    This function intentionally does not read or write ``UserLLMConfig``. It
+    is suitable for a request-scoped override after the user has explicitly
+    selected and verified a fallback provider.
+    """
+
     definition = get_provider_definition(provider_name)
     if definition is None:
         raise ProviderError(

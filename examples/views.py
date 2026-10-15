@@ -21,7 +21,7 @@ from .serializers import (
 )
 from .embedding import get_embedding, tags_to_text
 from .llm_pipeline import segment_article, infer_tags
-from generation.provider_service import resolve_active_provider
+from generation.provider_service import resolve_active_provider, resolve_provider
 from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -265,7 +265,16 @@ class ArticleSegmentView(APIView):
             return min(candidates, key=lambda f: f.start_line) if candidates else None
 
         # ── 逐缺口调用 LLM ──────────────────────────────────────────────────
-        provider = resolve_active_provider(request.user).instance
+        provider_override = (
+            request.data.get('provider_override')
+            or request.data.get('providerOverride')
+        )
+        resolved_provider = (
+            resolve_provider(request.user, provider_override)
+            if provider_override
+            else resolve_active_provider(request.user)
+        )
+        provider = resolved_provider.instance
 
         pending_fragments: list[Fragment] = []
 
