@@ -147,7 +147,10 @@ class LabelHistoryView(APIView):
         label = request.data.get('label', '').strip()
         if not field_type or not label:
             return Response(
-                {'error': 'fieldType and label are required'},
+                {
+                    'code': 'missing_required_fields',
+                    'detail': 'fieldType and label are required',
+                },
                 status=400
             )
         obj, _ = LabelHistory.objects.update_or_create(
