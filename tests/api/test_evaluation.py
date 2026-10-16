@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from characters.models import Relationship, RelationshipMembership
+from evaluation.models import ConsistencyScore
 from logs.models import LlmCallLog
 from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
@@ -65,6 +66,216 @@ def _post_evaluation(
         data=data,
         format='json',
     )
+
+
+def _assert_error(response, *, status, code, detail):
+    assert response.status_code == status
+    assert response.json() == {'code': code, 'detail': detail}
+
+
+@pytest.mark.django_db
+def test_evaluation_missing_required_fields_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        '/api/evaluation/score/',
+        data={'generatedText': '她没有退让。'},
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=400,
+        code='missing_required_fields',
+        detail='缺少必填参数',
+    )
+
+
+@pytest.mark.django_db
+def test_evaluation_missing_generation_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        '/api/evaluation/score/',
+        data={
+            'generationId': str(uuid.uuid4()),
+            'generatedText': '她没有退让。',
+            'characterId': str(uuid.uuid4()),
+        },
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=404,
+        code='generation_not_found',
+        detail='生成记录不存在',
+    )
+
+
+@pytest.mark.django_db
+def test_evaluation_missing_character_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    generation_log = _generation_log(user)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        '/api/evaluation/score/',
+        data={
+            'generationId': str(generation_log.generation_id),
+            'generatedText': '她没有退让。',
+            'characterId': str(uuid.uuid4()),
+        },
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=404,
+        code='character_not_found',
+        detail='角色不存在',
+    )
+
+
+@pytest.mark.django_db
+def test_evaluation_invalid_judge_result_uses_standard_error_contract(
+    api_client, make_user_with_key, monkeypatch,
+):
+    provider = FakeProvider(complete_text='not-json')
+    monkeypatch.setattr(
+        'evaluation.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(
+            instance=provider,
+            definition=SimpleNamespace(model='fake'),
+        ),
+    )
+
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    generation_log = _generation_log(user)
+    api_client.force_authenticate(user=user)
+
+    response = _post_evaluation(
+        api_client,
+        character,
+        generation_log,
+        [],
+    )
+
+    _assert_error(
+        response,
+        status=500,
+        code='evaluation_result_invalid',
+        detail='评估结果格式异常，请重试',
+    )
+    assert ConsistencyScore.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_rating_missing_value_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        f'/api/evaluation/score/{uuid.uuid4()}/rate/',
+        data={},
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=400,
+        code='missing_user_rating',
+        detail='缺少 user_rating 参数',
+    )
+
+
+@pytest.mark.django_db
+def test_rating_invalid_value_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        f'/api/evaluation/score/{uuid.uuid4()}/rate/',
+        data={'userRating': 11},
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=400,
+        code='invalid_user_rating',
+        detail='user_rating 必须为 0-10 整数',
+    )
+
+
+@pytest.mark.django_db
+def test_rating_missing_evaluation_uses_standard_error_contract(
+    api_client, user_factory,
+):
+    user = user_factory()
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        f'/api/evaluation/score/{uuid.uuid4()}/rate/',
+        data={'userRating': 8},
+        format='json',
+    )
+
+    _assert_error(
+        response,
+        status=404,
+        code='evaluation_not_found',
+        detail='评估记录不存在',
+    )
+
+
+@pytest.mark.django_db
+def test_rating_success_contract_and_write_are_unchanged(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    generation_log = _generation_log(user)
+    score = ConsistencyScore.objects.create(
+        user=user,
+        character=character,
+        generation_log=generation_log,
+        generated_text='她没有退让。',
+        score=6,
+        judge_reasoning='符合角色设定',
+        judge_model='fake',
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        f'/api/evaluation/score/{score.id}/rate/',
+        data={'userRating': 8},
+        format='json',
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'evaluationId': str(score.id),
+        'userRating': 8,
+        'llmScore': 6,
+        'finalScore': 7.4,
+    }
+    score.refresh_from_db()
+    assert score.user_rating == 8
+    assert score.user_rated_at is not None
 
 
 @pytest.mark.django_db
