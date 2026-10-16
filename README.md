@@ -86,11 +86,13 @@ Windows：
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；segment 可选 `providerOverride`，并会先完成、验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
-| Fragments | `/api/examples/fragments/` | 片段列表/创建、详情、infer-tags、confirm |
+| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持 |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
 路由细节以各 app 的 `urls.py` 与 serializer 为准。新增或修改 endpoint 时，应同步本表和跨系统实现稿。
+
+> **弃用通知（2026-10-16）**：仅 `POST /api/examples/fragments/` 进入弃用观察期；同路径 GET 及 fragment detail、infer-tags、confirm、merge、resolve-conflict、resolve-conflicts 均不在本次弃用范围。官方 Web/Mobile 当前不调用该 POST：单组冲突残余片段由原子 `POST /api/examples/fragments/resolve-conflict/` 创建，批量采用新版由 `POST /api/examples/fragments/resolve-conflicts/` 处理，自动切割则使用 article segment endpoint。该 POST 在观察期内仍保持现有行为；观察期从本通知合并到默认分支并公开后开始计算，至少 14 天、建议 30 天。只有可用生产日志窗口内继续没有 collection POST 调用，才会在后续独立 PR 中仅移除 `FragmentListView.post()`；GET 将继续保留。
 
 ## 关键运行边界
 
