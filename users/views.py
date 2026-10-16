@@ -133,11 +133,17 @@ class LLMConfigView(APIView):
 
         if provider not in SUPPORTED_PROVIDERS:
             return Response(
-                {'error': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}'},
+                {
+                    'code': 'unsupported_provider',
+                    'detail': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}',
+                },
                 status=400
             )
         if not api_key:
-            return Response({'error': 'API Key 不能为空'}, status=400)
+            return Response(
+                {'code': 'no_api_key', 'detail': 'API Key 不能为空'},
+                status=400,
+            )
 
         definition = _require_enabled_provider(provider)
 
@@ -172,7 +178,10 @@ class LLMConfigView(APIView):
 
         if provider not in SUPPORTED_PROVIDERS:
             return Response(
-                {'error': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}'},
+                {
+                    'code': 'unsupported_provider',
+                    'detail': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}',
+                },
                 status=400
             )
 
@@ -181,7 +190,10 @@ class LLMConfigView(APIView):
         key = _get_saved_key(request.user, provider)
         if key is None:
             return Response(
-                {'error': f'{provider} 尚未配置 API Key，请先保存 Key'},
+                {
+                    'code': 'no_api_key',
+                    'detail': f'{provider} 尚未配置 API Key，请先保存 Key',
+                },
                 status=400
             )
 
@@ -206,7 +218,10 @@ class LLMConfigVerifyView(APIView):
 
         if provider not in SUPPORTED_PROVIDERS:
             return Response(
-                {'error': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}'},
+                {
+                    'code': 'unsupported_provider',
+                    'detail': f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}',
+                },
                 status=400,
             )
 
@@ -215,7 +230,10 @@ class LLMConfigVerifyView(APIView):
         key = _get_saved_key(request.user, provider)
         if key is None:
             return Response(
-                {'error': f'{provider} 尚未配置 API Key，请先保存 Key'},
+                {
+                    'code': 'no_api_key',
+                    'detail': f'{provider} 尚未配置 API Key，请先保存 Key',
+                },
                 status=400,
             )
 
