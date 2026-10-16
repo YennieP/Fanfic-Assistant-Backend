@@ -74,19 +74,28 @@ class EvaluateView(APIView):
         )
 
         if not all([generation_id, generated_text, character_id]):
-            return Response({'error': '缺少必填参数'}, status=400)
+            return Response(
+                {'code': 'missing_required_fields', 'detail': '缺少必填参数'},
+                status=400,
+            )
 
         try:
             generation_log = LlmCallLog.objects.get(
                 generation_id=generation_id, user=request.user
             )
         except LlmCallLog.DoesNotExist:
-            return Response({'error': '生成记录不存在'}, status=404)
+            return Response(
+                {'code': 'generation_not_found', 'detail': '生成记录不存在'},
+                status=404,
+            )
 
         try:
             character = BaseCard.objects.get(id=character_id, owner=request.user)
         except BaseCard.DoesNotExist:
-            return Response({'error': '角色不存在'}, status=404)
+            return Response(
+                {'code': 'character_not_found', 'detail': '角色不存在'},
+                status=404,
+            )
 
         au_mod = None
         if au_mod_id:
@@ -141,7 +150,13 @@ class EvaluateView(APIView):
             score, reasoning = _parse_judge_response(result_text)
         except Exception:
             logger.error('Judge returned invalid response: %s', result_text)
-            return Response({'error': '评估结果格式异常，请重试'}, status=500)
+            return Response(
+                {
+                    'code': 'evaluation_result_invalid',
+                    'detail': '评估结果格式异常，请重试',
+                },
+                status=500,
+            )
 
         judge_log = None
         try:
@@ -181,19 +196,31 @@ class RateView(APIView):
     def patch(self, request, pk):
         raw = request.data.get('user_rating')
         if raw is None:
-            return Response({'error': '缺少 user_rating 参数'}, status=400)
+            return Response(
+                {'code': 'missing_user_rating', 'detail': '缺少 user_rating 参数'},
+                status=400,
+            )
 
         try:
             user_rating = int(raw)
             if not 0 <= user_rating <= 10:
                 raise ValueError
         except (ValueError, TypeError):
-            return Response({'error': 'user_rating 必须为 0-10 整数'}, status=400)
+            return Response(
+                {
+                    'code': 'invalid_user_rating',
+                    'detail': 'user_rating 必须为 0-10 整数',
+                },
+                status=400,
+            )
 
         try:
             score_obj = ConsistencyScore.objects.get(id=pk, user=request.user)
         except ConsistencyScore.DoesNotExist:
-            return Response({'error': '评估记录不存在'}, status=404)
+            return Response(
+                {'code': 'evaluation_not_found', 'detail': '评估记录不存在'},
+                status=404,
+            )
 
         score_obj.user_rating = user_rating
         score_obj.user_rated_at = timezone.now()

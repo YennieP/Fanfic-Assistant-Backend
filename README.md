@@ -84,7 +84,7 @@ Windows：
 | Relationships | `/api/relationships/` | 关系实体与 nested memberships；membership PATCH 支持标签、红线、称呼及 `inheritExclude` |
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
-| Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分 |
+| Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分；显式失败响应使用 `code` / `detail` |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；segment 可选 `providerOverride`，并会先完成、验证全部缺口结果，再用单个短事务替换旧的未确认草稿 |
 | Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持 |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
@@ -103,6 +103,7 @@ Windows：
 - GPT-OSS 同步 JSON 调用使用低 reasoning 强度，避免推理 token 挤占结构化输出预算；provider 的 401、402、404、429、其他状态、timeout 和 connection error 会转换为安全错误码，vendor 原始响应不会写入 API/SSE 响应或 `LlmCallLog.error_message`。Cerebras 402 单独表示账户没有可用额度或计费权限，不得误报为 Key 无效或短暂服务故障。
 - 对 SSE，`RestApiLog.status_code=200` 只表示流式响应已建立，`latency_ms` 只记录响应准备耗时；完整 provider 流耗时与最终成功/失败记录在同一 request ID 的 `LlmCallLog`。客户端提前断开按 error 记录，错误信息为 `stream interrupted before completion`。
 - 生成请求支持 `characterId`、`auModId`、`activeRelationshipIds`、结构化 `sceneInput`、`outputLanguage` 和可选 `forcedFragmentId`。当前网页还会传入 `resolvedRelationshipIds`：它是用户从自动激活集合中明确仲裁出的有序子集；评估请求必须复用生成快照中的这两个列表。
+- 评估 score/rate 的显式业务失败统一返回 `{"code": "...", "detail": "..."}`，当前机器码为 `missing_required_fields`、`generation_not_found`、`character_not_found`、`evaluation_result_invalid`、`missing_user_rating`、`invalid_user_rating` 与 `evaluation_not_found`；原 HTTP 状态和中文 `detail` 语义保持不变。该批次不涉及 SSE，provider 失败继续沿用既有安全错误码。
 - 生成与评估会先把 BaseCard、可选 AU Mod 和当前角色实际参与的 active relationships 解析为同一个 `EffectiveCharacterContext`。AU/relationship 的 `inheritExclude` 即使没有追加项也生效；空白或损坏列表项会被忽略；更高特异性来源按 ID 或规范化内容去重。未提供 `resolvedRelationshipIds` 的旧客户端继续按参与人数升序、同人数按创建时间和 UUID 稳定排序；提供该字段时只采用同时属于自动激活集合、当前用户且当前角色实际参与的关系，显式空列表也有效。跨特异性仍以参与人数更少者优先，用户顺序只在同一参与人数内生效；当采用多个关系时，generation/evaluation prompt 都明确声明靠前关系在无法同时满足时优先。两条调用路径共享有效数据，但 generation 保留称呼与创作模板，evaluation 保留独立 judge 模板。
 - BaseCard、AU Mod 和 relationship membership 的 `quickLabels` / `forbiddenBehaviors` 写入值必须是数组，且每个数组元素必须是 JSON object；顶层类型或元素类型错误时 serializer 返回 400，不再把字符串等旧格式写入 JSONField。该边界只固定容器与元素类型；`EffectiveCharacterContext` 仍负责忽略缺少有效 `content` 的对象。
 - 文章自动切割要求 provider 复制输入中标注的绝对行号，`start` / `end` 均为 inclusive；每个非空行必须恰好覆盖一次，空白行可以并入相邻片段或省略，但纯空白片段、重叠和越出当前 gap 的范围均会被拒绝。编号后文本按包含换行符的 3000 字符或 100 行上限分块，以先达到者为准；接近硬上限时优先退回最近 20 行内的空白行边界，避免人为切断相邻情节。单个超长原文行不会从行内拆开，以免破坏绝对行号协议。当前不猜测性修正 EOF 多一行等越界结果。
