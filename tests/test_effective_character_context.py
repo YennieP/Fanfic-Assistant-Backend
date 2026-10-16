@@ -14,6 +14,11 @@ from generation.prompt import build_prompt
 from tests.factories import BaseCardFactory
 
 
+def _line_block(text: str, start: str, end: str) -> list[str]:
+    lines = text.splitlines()
+    return lines[lines.index(start):lines.index(end) + 1]
+
+
 @pytest.mark.django_db
 def test_context_applies_exclusions_without_append_and_ignores_invalid_items():
     character = BaseCardFactory(
@@ -282,6 +287,46 @@ def test_generation_and_evaluation_golden_prompts_share_effective_context():
     assert '公开羞辱林宇' in evaluation_user
     assert '称呼 林宇 为：阿宇' in generation_system
     assert '称呼 林宇 为：阿宇' not in evaluation_user
+
+    assert _line_block(
+        generation_system,
+        '性格标签：冷静、警觉',
+        '称呼 林宇 为：阿宇',
+    ) == [
+        '性格标签：冷静、警觉',
+        '',
+        '【人设红线（绝对不能违反）】',
+        '  ✕ 迁怒无辜',
+        '',
+        '【AU设定：调查员 AU】',
+        '身份：调查员',
+        '',
+        '【激活的关系设定】',
+        '关系基调：互相信任但很少直说',
+        '陈默 在此关系中：保护欲强',
+        '关系专属红线：',
+        '  ✕ 公开羞辱林宇',
+        '称呼 林宇 为：阿宇',
+    ]
+    assert _line_block(
+        evaluation_user,
+        '性格标签：冷静、警觉',
+        '    ✕ 公开羞辱林宇',
+    ) == [
+        '性格标签：冷静、警觉',
+        '',
+        '人设红线（违反即扣分）：',
+        '  ✕ 迁怒无辜',
+        '',
+        'AU设定（调查员 AU）：',
+        '  身份：调查员',
+        '',
+        '生成时激活的关系设定（评估时作为参照）：',
+        '  关系基调：互相信任但很少直说',
+        '  陈默 在此关系中：保护欲强',
+        '  关系专属红线：',
+        '    ✕ 公开羞辱林宇',
+    ]
 
     generation_order = [
         generation_system.index('性格标签：冷静、警觉'),

@@ -1,9 +1,18 @@
 from rest_framework import serializers
-from .models import BaseCard, AUMod, Relationship, RelationshipMembership
 from .models import BaseCard, AUMod, Relationship, RelationshipMembership, LabelHistory
 
 
+def _object_list_field():
+    return serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+    )
+
+
 class AUModSerializer(serializers.ModelSerializer):
+    quick_labels = _object_list_field()
+    forbidden_behaviors = _object_list_field()
+
     class Meta:
         model = AUMod
         fields = [
@@ -19,6 +28,8 @@ class AUModSerializer(serializers.ModelSerializer):
 class RelationshipMembershipSerializer(serializers.ModelSerializer):
     character_id = serializers.UUIDField(source='character.id', read_only=True)
     character_name = serializers.CharField(source='character.name', read_only=True)
+    quick_labels = _object_list_field()
+    forbidden_behaviors = _object_list_field()
 
     class Meta:
         model = RelationshipMembership
@@ -82,6 +93,8 @@ class RelationshipSerializer(serializers.ModelSerializer):
 
 class BaseCardSerializer(serializers.ModelSerializer):
     au_mods = AUModSerializer(many=True, read_only=True)
+    quick_labels = _object_list_field()
+    forbidden_behaviors = _object_list_field()
 
     class Meta:
         model = BaseCard
