@@ -2,7 +2,7 @@ import pytest
 
 from generation.providers.base import CompleteResult, ProviderError
 from users.encryption import decrypt_key, encrypt_key
-from users.models import UserLLMConfig, UserProviderKey
+from users.models import SUPPORTED_PROVIDERS, UserLLMConfig, UserProviderKey
 
 
 CONFIG_URL = '/api/auth/llm-config/'
@@ -20,6 +20,84 @@ def _success(model='resolved-provider-model'):
 
 def _authenticate(api_client, user):
     api_client.force_authenticate(user=user)
+
+
+def _assert_error(response, *, status, code, detail):
+    assert response.status_code == status
+    assert response.json() == {'code': code, 'detail': detail}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('method', 'url', 'payload'),
+    [
+        (
+            'post',
+            CONFIG_URL,
+            {'provider': 'unsupported', 'api_key': 'candidate-key'},
+        ),
+        ('patch', CONFIG_URL, {'provider': 'unsupported'}),
+        ('post', VERIFY_URL, {'provider': 'unsupported'}),
+    ],
+)
+def test_llm_config_rejects_unsupported_provider_with_standard_error_contract(
+    api_client, user_factory, method, url, payload,
+):
+    user = user_factory()
+    _authenticate(api_client, user)
+
+    response = getattr(api_client, method)(url, payload, format='json')
+
+    _assert_error(
+        response,
+        status=400,
+        code='unsupported_provider',
+        detail=f'不支持的 provider，可选：{SUPPORTED_PROVIDERS}',
+    )
+    assert not UserLLMConfig.objects.filter(user=user).exists()
+    assert not UserProviderKey.objects.filter(user=user).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('method', 'url', 'payload', 'detail'),
+    [
+        (
+            'post',
+            CONFIG_URL,
+            {'provider': 'groq', 'api_key': '   '},
+            'API Key 不能为空',
+        ),
+        (
+            'patch',
+            CONFIG_URL,
+            {'provider': 'groq'},
+            'groq 尚未配置 API Key，请先保存 Key',
+        ),
+        (
+            'post',
+            VERIFY_URL,
+            {'provider': 'groq'},
+            'groq 尚未配置 API Key，请先保存 Key',
+        ),
+    ],
+)
+def test_llm_config_requires_api_key_with_standard_error_contract(
+    api_client, user_factory, method, url, payload, detail,
+):
+    user = user_factory()
+    _authenticate(api_client, user)
+
+    response = getattr(api_client, method)(url, payload, format='json')
+
+    _assert_error(
+        response,
+        status=400,
+        code='no_api_key',
+        detail=detail,
+    )
+    assert not UserLLMConfig.objects.filter(user=user).exists()
+    assert not UserProviderKey.objects.filter(user=user).exists()
 
 
 @pytest.mark.django_db
