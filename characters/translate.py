@@ -143,7 +143,13 @@ class TranslateView(APIView):
                 owner=request.user,
             )
         except BaseCard.DoesNotExist:
-            return Response({'error': f'未找到 {source_lang} 版本的角色卡'}, status=404)
+            return Response(
+                {
+                    'code': 'character_not_found',
+                    'detail': f'未找到 {source_lang} 版本的角色卡',
+                },
+                status=404,
+            )
 
         provider = resolve_active_provider(request.user).instance
 
@@ -211,11 +217,23 @@ class TranslateView(APIView):
             )
 
         if not result.text:
-            return Response({'error': '翻译返回为空，请重试'}, status=500)
+            return Response(
+                {
+                    'code': 'translation_result_invalid',
+                    'detail': '翻译返回为空，请重试',
+                },
+                status=500,
+            )
 
         parsed = _parse_json(result.text)
         if not isinstance(parsed, dict):
-            return Response({'error': '翻译结果格式异常，请重试'}, status=500)
+            return Response(
+                {
+                    'code': 'translation_result_invalid',
+                    'detail': '翻译结果格式异常，请重试',
+                },
+                status=500,
+            )
 
         # 回填 ID，camelCase 键名直接返回（DRF camelCase 中间件会转换响应键）
         translations = {}
