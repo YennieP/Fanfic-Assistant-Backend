@@ -3,6 +3,7 @@ from django.db import transaction
 from django.db.models import Max, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
@@ -25,6 +26,32 @@ from generation.provider_service import resolve_active_provider, resolve_provide
 from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
+
+
+def _confirm_fragment_if_unchanged(fragment: Fragment, embedding: list[float]) -> bool:
+    """只在向量化期间片段未变化时提交确认结果。"""
+    confirmed_at = timezone.now()
+    updated = Fragment.objects.filter(
+        id=fragment.id,
+        owner_id=fragment.owner_id,
+        article_id=fragment.article_id,
+        text=fragment.text,
+        tags=fragment.tags,
+        fragment_type='story',
+        is_confirmed=False,
+        updated_at=fragment.updated_at,
+    ).update(
+        embedding=embedding,
+        is_confirmed=True,
+        updated_at=confirmed_at,
+    )
+    if updated != 1:
+        return False
+
+    fragment.embedding = embedding
+    fragment.is_confirmed = True
+    fragment.updated_at = confirmed_at
+    return True
 
 
 def _extract_residuals(preserved: str, discarded: str) -> list[str]:
@@ -443,10 +470,11 @@ class ArticleConfirmSelectedView(APIView):
             fragment = selected_by_id[fragment_id]
             try:
                 tag_text = tag_text_by_id[fragment.id]
-                fragment.embedding = get_embedding(tag_text, api_key)
-                fragment.is_confirmed = True
-                fragment.save()
-                confirmed_ids.append(str(fragment.id))
+                embedding = get_embedding(tag_text, api_key)
+                if _confirm_fragment_if_unchanged(fragment, embedding):
+                    confirmed_ids.append(str(fragment.id))
+                else:
+                    error_ids.append(str(fragment.id))
             except Exception as e:
                 logger.error(
                     'Vectorization failed for fragment %s type=%s',
@@ -825,9 +853,8 @@ class FragmentConfirmView(APIView):
             tag_text = tags_to_text(fragment.tags)
             if not tag_text:
                 return Response({'error': '标签内容为空，无法向量化'}, status=400)
-            fragment.embedding    = get_embedding(tag_text, api_key)
-            fragment.is_confirmed = True
-            fragment.save()
+            embedding = get_embedding(tag_text, api_key)
+            confirmed = _confirm_fragment_if_unchanged(fragment, embedding)
         except Exception as e:
             logger.error(
                 'Fragment vectorization failed type=%s', type(e).__name__,
@@ -835,6 +862,15 @@ class FragmentConfirmView(APIView):
             return Response(
                 {'code': 'embedding_failed', 'detail': '向量化失败，请稍后重试'},
                 status=500,
+            )
+
+        if not confirmed:
+            return Response(
+                {
+                    'code': 'fragment_state_conflict',
+                    'detail': '片段状态已变化，请刷新后重试',
+                },
+                status=409,
             )
 
         return Response(FragmentSerializer(fragment).data)
