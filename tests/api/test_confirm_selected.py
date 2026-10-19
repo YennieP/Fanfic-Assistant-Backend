@@ -1,6 +1,7 @@
 """显式片段列表批量入库接口的范围与失败语义测试。"""
 
 import pytest
+from django.utils import timezone
 
 from examples.models import Article, Fragment
 from tests.factories import BaseCardFactory
@@ -234,6 +235,123 @@ def test_requires_gemini_key_before_embedding(api_client, user_factory, monkeypa
     fragment.refresh_from_db()
     assert fragment.is_confirmed is False
     assert fragment.embedding is None
+
+
+@pytest.mark.django_db
+def test_reports_a_concurrent_edit_as_failed_without_overwriting_it(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    edited = _fragment(article, '原始正文', order=1, tags={'scene_type': '日常'})
+    unaffected = _fragment(article, '正常片段', order=2, tags={'scene_type': '动作'})
+    embedding_calls = []
+
+    def fake_embedding(text, api_key):
+        embedding_calls.append((text, api_key))
+        if len(embedding_calls) == 1:
+            Fragment.objects.filter(id=edited.id).update(
+                text='并发修改后的正文',
+                tags={'scene_type': '争执'},
+                fragment_type='skip',
+                updated_at=timezone.now(),
+            )
+        return [0.1] * 768
+
+    monkeypatch.setattr('examples.views.get_embedding', fake_embedding)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        _endpoint(article),
+        data={'fragmentIds': [str(edited.id), str(unaffected.id)]},
+        format='json',
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'confirmed': 1,
+        'errors': 1,
+        'errorIds': [str(edited.id)],
+    }
+    edited.refresh_from_db()
+    unaffected.refresh_from_db()
+    assert edited.text == '并发修改后的正文'
+    assert edited.tags == {'scene_type': '争执'}
+    assert edited.fragment_type == 'skip'
+    assert edited.is_confirmed is False
+    assert edited.embedding is None
+    assert unaffected.is_confirmed is True
+    assert len(embedding_calls) == 2
+
+
+@pytest.mark.django_db
+def test_reports_a_concurrent_confirmation_as_failed_without_replacing_its_embedding(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, '并发确认片段', order=1)
+
+    def fake_embedding(_text, _api_key):
+        Fragment.objects.filter(id=fragment.id).update(
+            embedding=[0.2] * 768,
+            is_confirmed=True,
+            updated_at=timezone.now(),
+        )
+        return [0.1] * 768
+
+    monkeypatch.setattr('examples.views.get_embedding', fake_embedding)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        _endpoint(article),
+        data={'fragmentIds': [str(fragment.id)]},
+        format='json',
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'confirmed': 0,
+        'errors': 1,
+        'errorIds': [str(fragment.id)],
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is True
+    assert list(fragment.embedding) == [0.2] * 768
+
+
+@pytest.mark.django_db
+def test_reports_a_concurrent_deletion_as_failed_without_recreating_the_fragment(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, '并发删除片段', order=1)
+    fragment_id = fragment.id
+
+    def fake_embedding(_text, _api_key):
+        Fragment.objects.filter(id=fragment_id).delete()
+        return [0.1] * 768
+
+    monkeypatch.setattr('examples.views.get_embedding', fake_embedding)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        _endpoint(article),
+        data={'fragmentIds': [str(fragment_id)]},
+        format='json',
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'confirmed': 0,
+        'errors': 1,
+        'errorIds': [str(fragment_id)],
+    }
+    assert not Fragment.objects.filter(id=fragment_id).exists()
 
 
 @pytest.mark.django_db
