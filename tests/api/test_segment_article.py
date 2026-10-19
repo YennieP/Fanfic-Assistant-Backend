@@ -14,6 +14,7 @@ from examples.llm_pipeline import (
 )
 from examples.models import Article, Fragment
 from examples.views import _validate_segment_results
+from logs.models import LlmCallLog
 from tests.capacity_samples import (
     high_line_density_sample,
     near_limit_narrative_sample,
@@ -290,6 +291,73 @@ def test_segmentation_logs_safe_shape_when_provider_output_has_no_segments(caplo
     assert '这不是 JSON' not in caplog.text
 
 
+@pytest.mark.django_db
+def test_segment_requires_authentication(api_client, user_factory):
+    owner = user_factory()
+    character = BaseCardFactory(owner=owner)
+    article = _article(owner, character)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 401
+    assert response.data['code'] == 'unauthorized'
+    assert not article.fragments.exists()
+    assert not LlmCallLog.objects.exists()
+
+
+@pytest.mark.django_db
+def test_segment_hides_another_users_article(api_client, user_factory):
+    owner = user_factory()
+    requester = user_factory()
+    character = BaseCardFactory(owner=owner)
+    article = _article(owner, character)
+    api_client.force_authenticate(user=requester)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 404
+    assert response.data['code'] == 'not_found'
+    assert not article.fragments.exists()
+    assert not LlmCallLog.objects.exists()
+
+
+@pytest.mark.django_db
+def test_empty_article_returns_standard_error_without_resolving_provider(
+    api_client, user_factory, monkeypatch,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = Article.objects.create(
+        owner=user,
+        character=character,
+        title='空文章',
+        content='',
+    )
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda *_args, **_kwargs: pytest.fail('empty content must not resolve a provider'),
+    )
+    monkeypatch.setattr(
+        'examples.views.resolve_provider',
+        lambda *_args, **_kwargs: pytest.fail('empty content must not resolve a provider'),
+    )
+    monkeypatch.setattr(
+        'examples.views.segment_article',
+        lambda *_args, **_kwargs: pytest.fail('empty content must not call the LLM'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'article_content_empty',
+        'detail': '文章内容为空',
+    }
+    assert not article.fragments.exists()
+    assert not LlmCallLog.objects.exists()
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ('content', 'confirmed_ranges'),
@@ -514,6 +582,10 @@ def test_keeps_previous_drafts_when_a_gap_result_is_invalid(
     response = api_client.post(_endpoint(article), format='json')
 
     assert response.status_code == 503
+    assert response.data == {
+        'code': 'segmentation_result_invalid',
+        'detail': 'LLM 返回了空或不完整的切割结果，请稍后重试',
+    }
     assert Fragment.objects.filter(id=first_draft.id).exists()
     assert Fragment.objects.filter(id=second_draft.id).exists()
 
@@ -624,6 +696,10 @@ def test_rolls_back_draft_deletion_when_bulk_insert_fails(
     response = api_client.post(_endpoint(article), format='json')
 
     assert response.status_code == 500
+    assert response.data == {
+        'code': 'segmentation_save_failed',
+        'detail': '保存切割结果失败，请重试',
+    }
     assert Fragment.objects.filter(id=first_draft.id).exists()
     assert Fragment.objects.filter(id=second_draft.id).exists()
     assert article.fragments.filter(is_confirmed=False).count() == 2
