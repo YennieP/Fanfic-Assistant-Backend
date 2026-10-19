@@ -836,9 +836,15 @@ class FragmentConfirmView(APIView):
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
 
         if fragment.fragment_type == 'skip':
-            return Response({'error': 'skip 类型片段不需要入库'}, status=400)
+            return Response({
+                'code': 'fragment_state_conflict',
+                'detail': 'skip 类型片段不需要入库',
+            }, status=400)
         if not fragment.tags:
-            return Response({'error': '请先为片段打标签再确认入库'}, status=400)
+            return Response({
+                'code': 'fragment_tags_invalid',
+                'detail': '请先为片段打标签再确认入库',
+            }, status=400)
 
         from users.models import UserProviderKey
         try:
@@ -846,13 +852,17 @@ class FragmentConfirmView(APIView):
             api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
         except UserProviderKey.DoesNotExist:
             return Response({
-                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
+                'code': 'no_api_key',
+                'detail': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。',
             }, status=400)
 
         try:
             tag_text = tags_to_text(fragment.tags)
             if not tag_text:
-                return Response({'error': '标签内容为空，无法向量化'}, status=400)
+                return Response({
+                    'code': 'fragment_tags_invalid',
+                    'detail': '标签内容为空，无法向量化',
+                }, status=400)
             embedding = get_embedding(tag_text, api_key)
             confirmed = _confirm_fragment_if_unchanged(fragment, embedding)
         except Exception as e:

@@ -1,4 +1,4 @@
-"""单片段向量化确认的并发写入边界测试。"""
+"""单片段向量化确认的错误契约与并发写入边界测试。"""
 
 import pytest
 from django.utils import timezone
@@ -51,6 +51,116 @@ def test_confirms_an_unchanged_fragment(api_client, make_user_with_key, monkeypa
     fragment.refresh_from_db()
     assert fragment.is_confirmed is True
     assert list(fragment.embedding) == [0.1] * 768
+
+
+@pytest.mark.django_db
+def test_rejects_a_skip_fragment_with_standard_error_contract(
+    api_client, user_factory, monkeypatch,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    fragment.fragment_type = 'skip'
+    fragment.save(update_fields=['fragment_type', 'updated_at'])
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('skip fragment must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(fragment), format='json')
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': 'skip 类型片段不需要入库',
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False
+    assert fragment.embedding is None
+
+
+@pytest.mark.django_db
+def test_rejects_a_fragment_without_tags_with_standard_error_contract(
+    api_client, user_factory, monkeypatch,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    fragment.tags = {}
+    fragment.save(update_fields=['tags', 'updated_at'])
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('missing tags must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(fragment), format='json')
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_tags_invalid',
+        'detail': '请先为片段打标签再确认入库',
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False
+    assert fragment.embedding is None
+
+
+@pytest.mark.django_db
+def test_requires_gemini_key_with_standard_error_contract(
+    api_client, user_factory, monkeypatch,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('missing key must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(fragment), format='json')
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'no_api_key',
+        'detail': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。',
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False
+    assert fragment.embedding is None
+
+
+@pytest.mark.django_db
+def test_rejects_tags_without_effective_values_with_standard_error_contract(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    fragment.tags = {'emotion': {}}
+    fragment.save(update_fields=['tags', 'updated_at'])
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('ineffective tags must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(fragment), format='json')
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_tags_invalid',
+        'detail': '标签内容为空，无法向量化',
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False
+    assert fragment.embedding is None
 
 
 @pytest.mark.django_db
