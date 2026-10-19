@@ -251,8 +251,12 @@ class ArticleSegmentView(APIView):
             .order_by('start_line')
         )
 
-        # ── 找出所有缺口 ──────────────────────────────────────────────────────
-        gaps = _find_gaps(confirmed, total_lines)
+        # ── 找出仍含正文的缺口；纯空白缺口不是待切割内容 ─────────────────────
+        gaps = [
+            (gap_start, gap_end)
+            for gap_start, gap_end in _find_gaps(confirmed, total_lines)
+            if any(lines[index].strip() for index in range(gap_start, gap_end + 1))
+        ]
 
         if not gaps:
             return Response({
@@ -292,8 +296,6 @@ class ArticleSegmentView(APIView):
 
         for gap_idx, (gap_start, gap_end) in enumerate(gaps):
             gap_content = '\n'.join(lines[gap_start:gap_end + 1])
-            if not gap_content.strip():
-                continue
 
             prev_frag = _prev_fragment(gap_start)
             next_frag = _next_fragment(gap_end)
@@ -345,9 +347,6 @@ class ArticleSegmentView(APIView):
                     end_line=seg['end'],
                     order=seg['start'],  # 用 start_line 作 order，保证全文阅读顺序
                 ))
-
-        if not pending_fragments:
-            return Response({'error': 'LLM 返回了空结果，可能是负载过高，请稍后重试'}, status=503)
 
         replacement_range = Q(start_line__isnull=True) | Q(end_line__isnull=True)
         for gap_start, gap_end in gaps:
