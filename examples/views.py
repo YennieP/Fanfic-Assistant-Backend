@@ -28,6 +28,34 @@ from generation.providers.base import ProviderError
 logger = logging.getLogger(__name__)
 
 
+def _apply_inferred_tags_if_unchanged(fragment: Fragment, tags: dict) -> bool:
+    """只在标签推断期间片段未变化时提交推断结果。"""
+    inferred_at = timezone.now()
+    updated = Fragment.objects.filter(
+        id=fragment.id,
+        owner_id=fragment.owner_id,
+        article_id=fragment.article_id,
+        text=fragment.text,
+        tags=fragment.tags,
+        fragment_type=fragment.fragment_type,
+        is_confirmed=fragment.is_confirmed,
+        updated_at=fragment.updated_at,
+    ).update(
+        tags=tags,
+        is_confirmed=False,
+        embedding=None,
+        updated_at=inferred_at,
+    )
+    if updated != 1:
+        return False
+
+    fragment.tags = tags
+    fragment.is_confirmed = False
+    fragment.embedding = None
+    fragment.updated_at = inferred_at
+    return True
+
+
 def _confirm_fragment_if_unchanged(fragment: Fragment, embedding: list[float]) -> bool:
     """只在向量化期间片段未变化时提交确认结果。"""
     confirmed_at = timezone.now()
@@ -822,10 +850,16 @@ class FragmentInferTagsView(APIView):
                 status=500,
             )
 
-        fragment.tags         = tags
-        fragment.is_confirmed = False
-        fragment.embedding    = None
-        fragment.save()
+        applied = _apply_inferred_tags_if_unchanged(fragment, tags)
+        if not applied:
+            return Response(
+                {
+                    'code': 'fragment_state_conflict',
+                    'detail': '片段状态已变化，请刷新后重试',
+                },
+                status=409,
+            )
+
         return Response(FragmentSerializer(fragment).data)
 
 
