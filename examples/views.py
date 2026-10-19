@@ -169,9 +169,21 @@ class ArticleListView(APIView):
         content = request.data.get('content', '').strip()
 
         if not character_id:
-            return Response({'error': '请选择关联角色'}, status=400)
+            return Response(
+                {
+                    'code': 'missing_required_fields',
+                    'detail': '请选择关联角色',
+                },
+                status=400,
+            )
         if not content:
-            return Response({'error': '文章内容不能为空'}, status=400)
+            return Response(
+                {
+                    'code': 'missing_required_fields',
+                    'detail': '文章内容不能为空',
+                },
+                status=400,
+            )
 
         character = get_object_or_404(BaseCard, id=character_id, owner=request.user)
         article = Article.objects.create(
