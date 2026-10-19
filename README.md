@@ -87,7 +87,7 @@ Windows：
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分；显式失败响应使用 `code` / `detail` |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；创建时缺少角色或正文返回 400 `missing_required_fields` 且不写入。segment 可选 `providerOverride`，会在解析 provider 前忽略纯空白缺口，再先完成、验证全部实质缺口结果并用单个短事务替换旧草稿；空正文、无效结果、保存失败分别返回 `article_content_empty`、`segmentation_result_invalid`、`segmentation_save_failed`。confirm-selected 的选择范围、片段状态、标签和 Gemini Key 显式失败分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突计入既有部分失败汇总 |
-| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
+| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回 409 `fragment_state_conflict`，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
