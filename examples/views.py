@@ -401,19 +401,28 @@ class ArticleConfirmSelectedView(APIView):
             )
         )
         if len(selected) != len(fragment_ids):
-            return Response({'error': '所选片段必须全部属于当前文章'}, status=400)
+            return Response({
+                'code': 'fragment_selection_invalid',
+                'detail': '所选片段必须全部属于当前文章',
+            }, status=400)
         if any(
             fragment.is_confirmed or fragment.fragment_type != 'story'
             for fragment in selected
         ):
-            return Response({'error': '所选片段状态已变化，请刷新后重试'}, status=409)
+            return Response({
+                'code': 'fragment_state_conflict',
+                'detail': '所选片段状态已变化，请刷新后重试',
+            }, status=409)
 
         tag_text_by_id = {
             fragment.id: tags_to_text(fragment.tags)
             for fragment in selected
         }
         if any(not tag_text for tag_text in tag_text_by_id.values()):
-            return Response({'error': '所选片段必须全部包含有效标签'}, status=400)
+            return Response({
+                'code': 'fragment_tags_invalid',
+                'detail': '所选片段必须全部包含有效标签',
+            }, status=400)
 
         from users.models import UserProviderKey
         try:
@@ -424,7 +433,8 @@ class ArticleConfirmSelectedView(APIView):
             api_key = decrypt_key(gemini_key_obj.api_key_encrypted)
         except UserProviderKey.DoesNotExist:
             return Response({
-                'error': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。'
+                'code': 'no_api_key',
+                'detail': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。',
             }, status=400)
 
         selected_by_id = {fragment.id: fragment for fragment in selected}

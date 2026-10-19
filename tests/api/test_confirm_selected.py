@@ -96,6 +96,10 @@ def test_rejects_the_whole_selection_before_embedding_when_an_id_is_outside_arti
     )
 
     assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_selection_invalid',
+        'detail': '所选片段必须全部属于当前文章',
+    }
     own_fragment.refresh_from_db()
     outside_fragment.refresh_from_db()
     assert own_fragment.is_confirmed is False
@@ -126,6 +130,48 @@ def test_rejects_duplicate_fragment_ids(api_client, make_user_with_key, monkeypa
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    'fragment_kwargs',
+    [
+        {'confirmed': True},
+        {'fragment_type': 'skip'},
+    ],
+    ids=['already-confirmed', 'not-story'],
+)
+def test_rejects_the_whole_selection_before_embedding_when_fragment_state_changed(
+    api_client, user_factory, monkeypatch, fragment_kwargs,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(
+        article,
+        '状态已变化片段',
+        order=1,
+        **fragment_kwargs,
+    )
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('state conflict must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        _endpoint(article),
+        data={'fragmentIds': [str(fragment.id)]},
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '所选片段状态已变化，请刷新后重试',
+    }
+    fragment.refresh_from_db()
+    assert fragment.embedding is None
+
+
+@pytest.mark.django_db
 def test_rejects_the_whole_selection_before_embedding_when_tags_have_no_effective_value(
     api_client, make_user_with_key, monkeypatch,
 ):
@@ -152,11 +198,42 @@ def test_rejects_the_whole_selection_before_embedding_when_tags_have_no_effectiv
     )
 
     assert response.status_code == 400
-    assert response.json()['error'] == '所选片段必须全部包含有效标签'
+    assert response.data == {
+        'code': 'fragment_tags_invalid',
+        'detail': '所选片段必须全部包含有效标签',
+    }
     valid_fragment.refresh_from_db()
     ineffective_fragment.refresh_from_db()
     assert valid_fragment.is_confirmed is False
     assert ineffective_fragment.is_confirmed is False
+
+
+@pytest.mark.django_db
+def test_requires_gemini_key_before_embedding(api_client, user_factory, monkeypatch):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, '等待向量化片段', order=1)
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: pytest.fail('missing key must not start embedding'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        _endpoint(article),
+        data={'fragmentIds': [str(fragment.id)]},
+        format='json',
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        'code': 'no_api_key',
+        'detail': '向量化需要 Gemini API Key。请在设置页配置 Gemini Key 后重试。',
+    }
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is False
+    assert fragment.embedding is None
 
 
 @pytest.mark.django_db
