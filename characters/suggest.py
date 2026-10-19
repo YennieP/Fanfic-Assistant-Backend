@@ -386,7 +386,13 @@ class SuggestCompletionsView(APIView):
         character_data = request.data.get('character_data', {})
 
         if not (character_data.get('name') or '').strip():
-            return Response({'error': '请先填写角色名'}, status=400)
+            return Response(
+                {
+                    'code': 'missing_required_fields',
+                    'detail': '请先填写角色名',
+                },
+                status=400,
+            )
 
         provider = resolve_active_provider(request.user).instance
 
@@ -424,7 +430,13 @@ class SuggestCompletionsView(APIView):
             )
 
         if not result.text:
-            return Response({'error': '推断返回为空，请重试'}, status=500)
+            return Response(
+                {
+                    'code': 'suggestion_result_invalid',
+                    'detail': '推断返回为空，请重试',
+                },
+                status=500,
+            )
 
         data = _parse_json(result.text)
         suggestions = data.get('suggestions', [])
