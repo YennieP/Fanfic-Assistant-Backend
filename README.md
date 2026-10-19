@@ -79,6 +79,7 @@ Windows：
 | JWT | `/api/token/`, `/api/token/refresh/` | 获取与刷新 token |
 | LLM config | `/api/auth/llm-config/`, `/api/auth/llm-config/verify/` | 候选 Key 真实验证后保存、已存 Key 显式验证与当前 provider；响应包含 catalog `enabled` / `disabledReason`，不返回明文 Key |
 | Characters | `/api/characters/` | BaseCard CRUD |
+| Character suggestions | `/api/characters/suggest-completions/` | 仅返回可审阅的补全建议，不写入 BaseCard；缺少角色名返回 400 `missing_required_fields`，空生成结果返回 500 `suggestion_result_invalid` |
 | AU Mods | `/api/characters/{character_id}/mods/` | 角色下的 AU Mod CRUD |
 | Translation | `/api/characters/{canonical_id}/translate/`, `/versions/` | 翻译预览与多语言版本查询；源版本不存在返回 404 `character_not_found`，空或非对象翻译结果返回 500 `translation_result_invalid` |
 | Relationships | `/api/relationships/` | 关系实体与 nested memberships；membership PATCH 支持标签、红线、称呼及 `inheritExclude` |
