@@ -291,6 +291,123 @@ def test_segmentation_logs_safe_shape_when_provider_output_has_no_segments(caplo
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ('content', 'confirmed_ranges'),
+    [
+        ('正文一\n正文二', [(0, 1)]),
+        ('\n正文', [(1, 1)]),
+        ('正文一\n\n正文二', [(0, 0), (2, 2)]),
+        ('正文\n\n', [(0, 0)]),
+    ],
+    ids=['no-gap', 'leading-blank-gap', 'middle-blank-gap', 'trailing-blank-gap'],
+)
+def test_returns_noop_when_no_substantive_gap_remains_without_resolving_provider(
+    api_client, user_factory, monkeypatch, content, confirmed_ranges,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = Article.objects.create(
+        owner=user,
+        character=character,
+        title='仅剩空白缺口',
+        content=content,
+    )
+    for order, (start, end) in enumerate(confirmed_ranges):
+        _fragment(
+            article,
+            '\n'.join(content.splitlines()[start:end + 1]).strip(),
+            confirmed=True,
+            start=start,
+            end=end,
+            order=order,
+        )
+    fragments_before = list(
+        article.fragments.order_by('start_line').values_list(
+            'id', 'text', 'is_confirmed', 'start_line', 'end_line',
+        )
+    )
+    provider_resolution_calls = []
+
+    def record_provider_resolution(*args, **kwargs):
+        provider_resolution_calls.append((args, kwargs))
+        return SimpleNamespace(instance=object())
+
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        record_provider_resolution,
+    )
+    monkeypatch.setattr(
+        'examples.views.resolve_provider',
+        record_provider_resolution,
+    )
+    monkeypatch.setattr(
+        'examples.views.segment_article',
+        lambda *_args, **_kwargs: pytest.fail('blank-only gaps must not call the LLM'),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'count': 0,
+        'fragments': [],
+        'message': '所有内容已分割完毕，无需重新切割',
+    }
+    assert provider_resolution_calls == []
+    assert list(
+        article.fragments.order_by('start_line').values_list(
+            'id', 'text', 'is_confirmed', 'start_line', 'end_line',
+        )
+    ) == fragments_before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_segments_only_substantive_gaps_when_blank_and_content_gaps_are_mixed(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key()
+    character = BaseCardFactory(owner=user)
+    article = Article.objects.create(
+        owner=user,
+        character=character,
+        title='混合缺口',
+        content='已确认一\n\n已确认二\n待切割',
+    )
+    first_confirmed = _fragment(
+        article, '已确认一', confirmed=True, start=0, end=0, order=0,
+    )
+    second_confirmed = _fragment(
+        article, '已确认二', confirmed=True, start=2, end=2, order=2,
+    )
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
+    segmentation_calls = []
+
+    def record_segmentation(content, _provider, *, global_start, **_kwargs):
+        segmentation_calls.append((content, global_start))
+        return _result_for(content, global_start)
+
+    monkeypatch.setattr('examples.views.segment_article', record_segmentation)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 200
+    assert response.json()['count'] == 1
+    assert segmentation_calls == [('待切割', 3)]
+    assert Fragment.objects.filter(id=first_confirmed.id, is_confirmed=True).exists()
+    assert Fragment.objects.filter(id=second_confirmed.id, is_confirmed=True).exists()
+    assert list(
+        article.fragments.filter(is_confirmed=False).values_list(
+            'text', 'start_line', 'end_line',
+        )
+    ) == [('待切割', 3, 3)]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_api_replaces_old_draft_when_gap_starts_with_a_blank_line(
     api_client, make_user_with_key, monkeypatch,
 ):
