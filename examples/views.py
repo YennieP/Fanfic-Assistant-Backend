@@ -242,7 +242,10 @@ class ArticleSegmentView(APIView):
         lines       = article.content.splitlines()
         total_lines = len(lines)
         if total_lines == 0:
-            return Response({'error': '文章内容为空'}, status=400)
+            return Response({
+                'code': 'article_content_empty',
+                'detail': '文章内容为空',
+            }, status=400)
 
         # ── 获取所有已确认且有行号的片段（用于 gap 检测和上下文提取）────────
         confirmed = list(
@@ -333,7 +336,8 @@ class ArticleSegmentView(APIView):
                     e,
                 )
                 return Response({
-                    'error': 'LLM 返回了空或不完整的切割结果，请稍后重试',
+                    'code': 'segmentation_result_invalid',
+                    'detail': 'LLM 返回了空或不完整的切割结果，请稍后重试',
                 }, status=503)
 
             for seg in validated_results:
@@ -367,7 +371,10 @@ class ArticleSegmentView(APIView):
                 Fragment.objects.bulk_create(pending_fragments)
         except Exception:
             logger.exception('Failed to replace segmented drafts for article %s', article.id)
-            return Response({'error': '保存切割结果失败，请重试'}, status=500)
+            return Response({
+                'code': 'segmentation_save_failed',
+                'detail': '保存切割结果失败，请重试',
+            }, status=500)
 
         return Response({
             'count':     len(pending_fragments),
