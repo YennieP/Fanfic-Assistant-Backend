@@ -813,22 +813,15 @@ class FragmentDetailView(APIView):
         version_serializer.is_valid(raise_exception=True)
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
 
-        client_version = version_serializer.validated_data.get('updated_at')
-        if client_version is None:
-            logger.warning('Fragment PATCH missing updatedAt')
-        expected_version = client_version or fragment.updated_at
+        expected_version = version_serializer.validated_data['updated_at']
 
         updates = {}
-        changed = False
         if 'text' in request.data:
             updates['text'] = request.data['text']
-            changed = True
         if 'tags' in request.data:
             updates['tags'] = request.data['tags']
-            changed = True
-        if changed:
-            updates['is_confirmed'] = False
-            updates['embedding'] = None
+        updates['is_confirmed'] = False
+        updates['embedding'] = None
 
         patched_at = timezone.now()
         updates['updated_at'] = patched_at
