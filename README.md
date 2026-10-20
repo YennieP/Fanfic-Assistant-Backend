@@ -87,7 +87,7 @@ Windows：
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分；显式失败响应使用 `code` / `detail` |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；创建时缺少角色或正文返回 400 `missing_required_fields` 且不写入。segment 可选 `providerOverride`，会在解析 provider 前忽略纯空白缺口，再先完成、验证全部实质缺口结果并用单个短事务替换旧草稿；空正文、无效结果、保存失败分别返回 `article_content_empty`、`segmentation_result_invalid`、`segmentation_save_failed`。confirm-selected 的选择范围、片段状态、标签和 Gemini Key 显式失败分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突计入既有部分失败汇总 |
-| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回 409 `fragment_state_conflict`，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
+| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。详情 PATCH 在兼容期可选接收 `updatedAt`，用字段级条件更新避免覆盖并发状态或在删除后复活片段，版本冲突返回 409 `fragment_state_conflict`；缺少版本暂不拒绝，但会产生不含用户数据的安全观测信号。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回相同 409，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段 |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
@@ -113,6 +113,7 @@ Windows：
 - 文章自动切割当前使用 4000 输出 token 上限；生产容量验收确认 2000 会在接近 chunk 上限的高行密度输入上耗尽并截断 JSON。该值是调用上限，不代表每次固定消耗 4000 token。
 - Gemini 同步调用会向应用控制台日志记录容量指标（model、finish reason、prompt/completion/total/unattributed token 和输出预算），不记录 prompt、模型正文或 API Key；`unattributed` 只表示 SDK 未分类的 token，不直接等同于 thinking token。
 - `confirm-selected` 只处理请求中显式列出的、属于当前文章、状态仍可确认且包含可向量化有效标签的片段 ID；选择范围无效、片段状态变化、标签无效和缺少 Gemini Key 会在调用 embedding 前分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`，原 HTTP 状态和中文 `detail` 语义保持不变。批量和单片段 confirm 都不会在等待外部 embedding 时持有数据库锁；embedding 返回后，只在正文、标签、类型、确认状态和版本均未变化且片段仍存在时条件写入 embedding 与确认状态，因此不会覆盖并发编辑、覆盖另一确认结果或复活已删除片段。条件不满足时，批量路径把该 ID 计入既有 200 部分失败汇总并继续处理后续选择，单片段路径返回 409 `fragment_state_conflict`。逐片段向量化异常仍使用既有失败语义。旧 `confirm-all` 已在前端切换完成后退役，避免绕过显式范围约束。
+- `PATCH /api/examples/fragments/{id}/` 继续只识别 `text` 与 `tags`，任一字段存在都会撤销确认并清空 embedding；响应仍返回完整 Fragment。兼容期内 `updatedAt` 可选：提供时按该客户端版本执行单条条件更新，缺少时按服务端读取版本保护当前请求窗口并只记录固定的 `Fragment PATCH missing updatedAt` 信号，不记录用户、片段 ID 或请求正文。版本不匹配或读取后片段被删除均返回 409 `fragment_state_conflict`，不会写入任何字段或复活记录；请求开始前已不存在及越权仍保持 404，GET 与 DELETE 行为不变。官方 Web 切换并完成至少 14 天缺版本观察前，不会强制该字段。
 - 单组冲突处理必须同时提交旧、新片段的 `updated_at` 版本；版本缺失或与当前记录不一致时不会执行写入。
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除，并要求提交双方 `updated_at`。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；外部 LLM 调用不在这些事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。

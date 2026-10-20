@@ -21,6 +21,10 @@ class FragmentSerializer(serializers.ModelSerializer):
         # 允许创建父片段（character=null）时由前端控制
 
 
+class FragmentPatchVersionSerializer(serializers.Serializer):
+    updated_at = serializers.DateTimeField(required=False)
+
+
 class ResolveConflictSerializer(serializers.Serializer):
     old_fragment_id = serializers.UUIDField()
     new_fragment_id = serializers.UUIDField()

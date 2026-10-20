@@ -122,11 +122,14 @@ def test_patch_without_client_version_remains_compatible_and_logs_safe_signal(
     fragment.refresh_from_db()
     assert fragment.text == private_text
     records = [
-        record.getMessage()
+        record
         for record in caplog.records
         if record.name == 'examples.views'
     ]
-    assert records == ['Fragment PATCH missing updatedAt']
+    assert [record.getMessage() for record in records] == [
+        'Fragment PATCH missing updatedAt',
+    ]
+    assert [record.levelname for record in records] == ['WARNING']
     assert 'private-user-marker' not in caplog.text
     assert 'private-body-marker' not in caplog.text
     assert str(fragment.id) not in caplog.text
@@ -296,3 +299,33 @@ def test_patch_hides_another_users_fragment(api_client, user_factory):
     assert response.status_code == 404
     fragment.refresh_from_db()
     assert fragment.text == '原始正文'
+
+
+@pytest.mark.django_db
+def test_get_on_shared_detail_path_is_unchanged(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.get(_endpoint(fragment))
+
+    assert response.status_code == 200
+    assert response.data['id'] == str(fragment.id)
+    assert response.data['text'] == '原始正文'
+
+
+@pytest.mark.django_db
+def test_delete_on_shared_detail_path_is_unchanged(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    fragment_id = fragment.id
+    api_client.force_authenticate(user=user)
+
+    response = api_client.delete(_endpoint(fragment))
+
+    assert response.status_code == 204
+    assert not Fragment.objects.filter(id=fragment_id).exists()
