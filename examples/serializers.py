@@ -22,7 +22,14 @@ class FragmentSerializer(serializers.ModelSerializer):
 
 
 class FragmentPatchVersionSerializer(serializers.Serializer):
-    updated_at = serializers.DateTimeField(required=False)
+    updated_at = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        if not any(field in self.initial_data for field in ('text', 'tags')):
+            raise serializers.ValidationError(
+                '至少需要提供 text 或 tags',
+            )
+        return attrs
 
 
 class ResolveConflictSerializer(serializers.Serializer):

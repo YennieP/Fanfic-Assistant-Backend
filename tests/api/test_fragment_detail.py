@@ -101,38 +101,79 @@ def test_patch_updates_only_requested_fields_and_invalidates_confirmation(
 
 
 @pytest.mark.django_db
-def test_patch_without_client_version_remains_compatible_and_logs_safe_signal(
-    api_client, user_factory, caplog,
-):
-    user = user_factory(username='private-user-marker')
+def test_patch_requires_client_version_without_writing(api_client, user_factory):
+    user = user_factory()
     character = BaseCardFactory(owner=user)
     article = _article(user, character)
     fragment = _fragment(article)
-    private_text = 'private-body-marker'
+    original_updated_at = fragment.updated_at
     api_client.force_authenticate(user=user)
 
-    with caplog.at_level('INFO', logger='examples.views'):
-        response = api_client.patch(
-            _endpoint(fragment),
-            data={'text': private_text},
-            format='json',
-        )
+    response = api_client.patch(
+        _endpoint(fragment),
+        data={'text': '不应保存的正文'},
+        format='json',
+    )
 
-    assert response.status_code == 200
+    assert response.status_code == 400
     fragment.refresh_from_db()
-    assert fragment.text == private_text
-    records = [
-        record
-        for record in caplog.records
-        if record.name == 'examples.views'
-    ]
-    assert [record.getMessage() for record in records] == [
-        'Fragment PATCH missing updatedAt',
-    ]
-    assert [record.levelname for record in records] == ['WARNING']
-    assert 'private-user-marker' not in caplog.text
-    assert 'private-body-marker' not in caplog.text
-    assert str(fragment.id) not in caplog.text
+    assert fragment.text == '原始正文'
+    assert fragment.is_confirmed is True
+    assert list(fragment.embedding) == [0.2] * 768
+    assert fragment.updated_at == original_updated_at
+
+
+@pytest.mark.django_db
+def test_patch_rejects_invalid_client_version_without_writing(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    original_updated_at = fragment.updated_at
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        _endpoint(fragment),
+        data={'text': '不应保存的正文', 'updatedAt': 'not-a-date'},
+        format='json',
+    )
+
+    assert response.status_code == 400
+    fragment.refresh_from_db()
+    assert fragment.text == '原始正文'
+    assert fragment.updated_at == original_updated_at
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('include_version', [False, True])
+def test_patch_rejects_requests_without_mutable_fields(
+    api_client, user_factory, include_version,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    original_updated_at = fragment.updated_at
+    payload = (
+        {'updatedAt': original_updated_at.isoformat()}
+        if include_version
+        else {}
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.patch(
+        _endpoint(fragment),
+        data=payload,
+        format='json',
+    )
+
+    assert response.status_code == 400
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is True
+    assert list(fragment.embedding) == [0.2] * 768
+    assert fragment.updated_at == original_updated_at
 
 
 @pytest.mark.django_db
@@ -158,7 +199,10 @@ def test_rejects_concurrent_text_and_layout_change_without_overwriting_it(
 
     response = api_client.patch(
         _endpoint(fragment),
-        data={'tags': {'scene_type': '动作'}},
+        data={
+            'tags': {'scene_type': '动作'},
+            'updatedAt': fragment.updated_at.isoformat(),
+        },
         format='json',
     )
 
@@ -195,7 +239,10 @@ def test_rejects_concurrent_tag_change_without_overwriting_it(
 
     response = api_client.patch(
         _endpoint(fragment),
-        data={'text': '用户提交的新正文'},
+        data={
+            'text': '用户提交的新正文',
+            'updatedAt': fragment.updated_at.isoformat(),
+        },
         format='json',
     )
 
@@ -226,7 +273,10 @@ def test_does_not_resurrect_fragment_deleted_after_read(
 
     response = api_client.patch(
         _endpoint(fragment),
-        data={'text': '不应保存的正文'},
+        data={
+            'text': '不应保存的正文',
+            'updatedAt': fragment.updated_at.isoformat(),
+        },
         format='json',
     )
 
