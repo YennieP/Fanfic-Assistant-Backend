@@ -15,6 +15,7 @@ from .serializers import (
     ArticleSerializer,
     ArticleListSerializer,
     ConfirmSelectedSerializer,
+    FragmentPatchVersionSerializer,
     FragmentSerializer,
     MergeFragmentsSerializer,
     ResolveConflictSerializer,
@@ -808,18 +809,45 @@ class FragmentDetailView(APIView):
         return Response(FragmentSerializer(fragment).data)
 
     def patch(self, request, fragment_id):
+        version_serializer = FragmentPatchVersionSerializer(data=request.data)
+        version_serializer.is_valid(raise_exception=True)
         fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
+
+        client_version = version_serializer.validated_data.get('updated_at')
+        if client_version is None:
+            logger.warning('Fragment PATCH missing updatedAt')
+        expected_version = client_version or fragment.updated_at
+
+        updates = {}
         changed = False
         if 'text' in request.data:
-            fragment.text = request.data['text']
+            updates['text'] = request.data['text']
             changed = True
         if 'tags' in request.data:
-            fragment.tags = request.data['tags']
+            updates['tags'] = request.data['tags']
             changed = True
         if changed:
-            fragment.is_confirmed = False
-            fragment.embedding    = None
-        fragment.save()
+            updates['is_confirmed'] = False
+            updates['embedding'] = None
+
+        patched_at = timezone.now()
+        updates['updated_at'] = patched_at
+        updated = Fragment.objects.filter(
+            id=fragment.id,
+            owner_id=fragment.owner_id,
+            updated_at=expected_version,
+        ).update(**updates)
+        if updated != 1:
+            return Response(
+                {
+                    'code': 'fragment_state_conflict',
+                    'detail': '片段状态已变化，请刷新后重试',
+                },
+                status=409,
+            )
+
+        for field, value in updates.items():
+            setattr(fragment, field, value)
         return Response(FragmentSerializer(fragment).data)
 
     def delete(self, request, fragment_id):
