@@ -604,14 +604,32 @@ class FragmentResolveConflictView(APIView):
             new_fragment = fragments_by_id[new_id]
 
             if not old_fragment.article_id or old_fragment.article_id != new_fragment.article_id:
-                return Response({'error': '新旧片段必须属于同一篇文章'}, status=400)
+                return Response(
+                    {
+                        'code': 'fragment_selection_invalid',
+                        'detail': '新旧片段必须属于同一篇文章',
+                    },
+                    status=400,
+                )
             if not old_fragment.is_confirmed or new_fragment.is_confirmed:
-                return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+                return Response(
+                    {
+                        'code': 'fragment_state_conflict',
+                        'detail': '冲突状态已变化，请刷新后重试',
+                    },
+                    status=409,
+                )
             if (
                 old_fragment.updated_at != data['old_updated_at']
                 or new_fragment.updated_at != data['new_updated_at']
             ):
-                return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+                return Response(
+                    {
+                        'code': 'fragment_state_conflict',
+                        'detail': '冲突状态已变化，请刷新后重试',
+                    },
+                    status=409,
+                )
 
             if action == 'keepOld':
                 preserved_fragment = old_fragment
