@@ -40,6 +40,13 @@ def _payload(keep_fragment, delete_fragment, merged_text):
     }
 
 
+def test_requires_authentication(api_client):
+    response = api_client.post(ENDPOINT, data={}, format='json')
+
+    assert response.status_code == 401
+    assert response.data['code'] == 'unauthorized'
+
+
 @pytest.mark.django_db
 def test_merges_two_fragments_in_one_request(api_client, user_factory):
     user = user_factory()
@@ -82,6 +89,10 @@ def test_rejects_fragments_from_different_articles(api_client, user_factory):
     )
 
     assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_selection_invalid',
+        'detail': '待合并片段必须属于同一篇文章',
+    }
     assert Fragment.objects.filter(id__in=[keep_fragment.id, delete_fragment.id]).count() == 2
 
 
@@ -104,27 +115,35 @@ def test_does_not_merge_another_users_fragment(api_client, user_factory):
     )
 
     assert response.status_code == 404
+    assert response.data['code'] == 'not_found'
     assert Fragment.objects.filter(id__in=[keep_fragment.id, delete_fragment.id]).count() == 2
 
 
 @pytest.mark.django_db
-def test_rejects_stale_fragment_versions(api_client, user_factory):
+@pytest.mark.parametrize('stale_target', ['keep', 'delete'])
+def test_rejects_stale_fragment_versions(api_client, user_factory, stale_target):
     user = user_factory()
     character = BaseCardFactory(owner=user)
     article = _article(user, character)
     keep_fragment = _fragment(article, '一', confirmed=False, order=1)
     delete_fragment = _fragment(article, '二', confirmed=False, order=2)
     payload = _payload(keep_fragment, delete_fragment, '一\n二')
-    keep_fragment.text = '并发修改'
-    keep_fragment.save(update_fields=['text', 'updated_at'])
+    stale_fragment = keep_fragment if stale_target == 'keep' else delete_fragment
+    stale_fragment.text = '并发修改'
+    stale_fragment.save(update_fields=['text', 'updated_at'])
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')
 
     assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '片段状态已变化，请刷新后重试',
+    }
     keep_fragment.refresh_from_db()
-    assert keep_fragment.text == '并发修改'
-    assert Fragment.objects.filter(id=delete_fragment.id).exists()
+    delete_fragment.refresh_from_db()
+    assert keep_fragment.text == ('并发修改' if stale_target == 'keep' else '一')
+    assert delete_fragment.text == ('并发修改' if stale_target == 'delete' else '二')
 
 
 @pytest.mark.django_db(transaction=True)
@@ -172,4 +191,5 @@ def test_repeated_request_does_not_apply_twice(api_client, user_factory):
 
     assert first_response.status_code == 200
     assert second_response.status_code == 404
+    assert second_response.data['code'] == 'not_found'
     assert list(article.fragments.values_list('text', flat=True)) == ['一\n二']
