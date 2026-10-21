@@ -777,13 +777,25 @@ class FragmentMergeView(APIView):
                 not keep_fragment.article_id
                 or keep_fragment.article_id != delete_fragment.article_id
             ):
-                return Response({'error': '待合并片段必须属于同一篇文章'}, status=400)
+                return Response(
+                    {
+                        'code': 'fragment_selection_invalid',
+                        'detail': '待合并片段必须属于同一篇文章',
+                    },
+                    status=400,
+                )
 
             if (
                 keep_fragment.updated_at != data['keep_updated_at']
                 or delete_fragment.updated_at != data['delete_updated_at']
             ):
-                return Response({'error': '片段状态已变化，请刷新后重试'}, status=409)
+                return Response(
+                    {
+                        'code': 'fragment_state_conflict',
+                        'detail': '片段状态已变化，请刷新后重试',
+                    },
+                    status=409,
+                )
 
             keep_fragment.text = data['merged_text']
             keep_fragment.is_confirmed = False
