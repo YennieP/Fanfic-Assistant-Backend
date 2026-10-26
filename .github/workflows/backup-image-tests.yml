@@ -3,7 +3,7 @@ name: backup-image-tests
 on:
   push:
     paths:
-      - '.dockerignore'
+      - 'Dockerfile.backup.dockerignore'
       - 'Dockerfile.backup'
       - 'scripts/backup_postgres.sh'
       - 'scripts/db_001_backup_reader.sql'
@@ -12,7 +12,7 @@ on:
       - '.github/workflows/backup-image-tests.yml'
   pull_request:
     paths:
-      - '.dockerignore'
+      - 'Dockerfile.backup.dockerignore'
       - 'Dockerfile.backup'
       - 'scripts/backup_postgres.sh'
       - 'scripts/db_001_backup_reader.sql'
