@@ -13,7 +13,8 @@ ROLE_SQL = ROOT / "scripts" / "db_001_backup_reader.sql"
 DOCKERFILE = ROOT / "Dockerfile.backup"
 WRITER_POLICY = ROOT / "ops" / "backup" / "aws-writer-policy.example.json"
 LIFECYCLE_POLICY = ROOT / "ops" / "backup" / "aws-lifecycle.example.json"
-DOCKERIGNORE = ROOT / ".dockerignore"
+ROOT_DOCKERIGNORE = ROOT / ".dockerignore"
+BACKUP_DOCKERIGNORE = ROOT / "Dockerfile.backup.dockerignore"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -300,7 +301,10 @@ def test_backup_image_pins_postgres_major_and_runs_as_non_root():
     assert "USER postgres" in dockerfile
     assert 'ENTRYPOINT ["/usr/local/bin/backup-postgres"]' in dockerfile
 
-    dockerignore = DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
+    assert not ROOT_DOCKERIGNORE.exists(), (
+        "the backup allowlist must not filter the Railway web build context"
+    )
+    dockerignore = BACKUP_DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
     assert dockerignore[0] == "**"
     assert "!Dockerfile.backup" in dockerignore
     assert "!scripts/backup_postgres.sh" in dockerignore
