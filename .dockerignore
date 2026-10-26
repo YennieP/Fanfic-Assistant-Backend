@@ -1,0 +1,4 @@
+**
+!Dockerfile.backup
+!scripts/
+!scripts/backup_postgres.sh
