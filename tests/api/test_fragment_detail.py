@@ -1,4 +1,4 @@
-"""普通片段 PATCH 的字段更新、版本与并发边界测试。"""
+"""普通片段详情 PATCH/DELETE 的版本、权限与并发边界测试。"""
 
 import pytest
 from django.db.models.query import QuerySet
@@ -17,6 +17,10 @@ STATE_CONFLICT = {
 
 def _endpoint(fragment):
     return f'/api/examples/fragments/{fragment.id}/'
+
+
+def _delete_payload(fragment):
+    return {'updatedAt': fragment.updated_at.isoformat()}
 
 
 def _article(user, character):
@@ -367,15 +371,250 @@ def test_get_on_shared_detail_path_is_unchanged(api_client, user_factory):
 
 
 @pytest.mark.django_db
-def test_delete_on_shared_detail_path_is_unchanged(api_client, user_factory):
+def test_delete_requires_client_version_without_deleting(api_client, user_factory):
     user = user_factory()
     character = BaseCardFactory(owner=user)
     article = _article(user, character)
     fragment = _fragment(article)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.delete(_endpoint(fragment), data={}, format='json')
+
+    assert response.status_code == 400
+    assert Fragment.objects.filter(id=fragment.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_rejects_invalid_client_version_without_deleting(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.delete(
+        _endpoint(fragment),
+        data={'updatedAt': 'not-a-date'},
+        format='json',
+    )
+
+    assert response.status_code == 400
+    assert Fragment.objects.filter(id=fragment.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_rejects_stale_version_without_deleting(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    payload = _delete_payload(fragment)
+    Fragment.objects.filter(id=fragment.id).update(
+        text='并发修改后的正文',
+        updated_at=timezone.now(),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.delete(_endpoint(fragment), data=payload, format='json')
+
+    assert response.status_code == 409
+    assert response.data == STATE_CONFLICT
+    fragment.refresh_from_db()
+    assert fragment.text == '并发修改后的正文'
+
+
+@pytest.mark.django_db
+def test_delete_rejects_parent_fragment_without_cascading(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    parent = _fragment(article, character=None)
+    child = _fragment(article, parent_fragment=parent, order=2)
+    api_client.force_authenticate(user=user)
+
+    response = api_client.delete(
+        _endpoint(parent),
+        data=_delete_payload(parent),
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == STATE_CONFLICT
+    assert Fragment.objects.filter(id=parent.id).exists()
+    assert Fragment.objects.filter(id=child.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_current_version_removes_only_target(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    sibling = _fragment(article, order=2)
     fragment_id = fragment.id
     api_client.force_authenticate(user=user)
 
-    response = api_client.delete(_endpoint(fragment))
+    response = api_client.delete(
+        _endpoint(fragment),
+        data=_delete_payload(fragment),
+        format='json',
+    )
 
     assert response.status_code == 204
     assert not Fragment.objects.filter(id=fragment_id).exists()
+    assert Fragment.objects.filter(id=sibling.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_requires_authentication(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+
+    response = api_client.delete(
+        _endpoint(fragment),
+        data=_delete_payload(fragment),
+        format='json',
+    )
+
+    assert response.status_code == 401
+    assert Fragment.objects.filter(id=fragment.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_hides_another_users_fragment(api_client, user_factory):
+    owner = user_factory()
+    other_user = user_factory()
+    character = BaseCardFactory(owner=owner)
+    article = _article(owner, character)
+    fragment = _fragment(article)
+    api_client.force_authenticate(user=other_user)
+
+    response = api_client.delete(
+        _endpoint(fragment),
+        data=_delete_payload(fragment),
+        format='json',
+    )
+
+    assert response.status_code == 404
+    assert Fragment.objects.filter(id=fragment.id).exists()
+
+
+@pytest.mark.django_db
+def test_repeated_delete_returns_not_found(api_client, user_factory):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    payload = _delete_payload(fragment)
+    api_client.force_authenticate(user=user)
+
+    first_response = api_client.delete(
+        _endpoint(fragment), data=payload, format='json',
+    )
+    second_response = api_client.delete(
+        _endpoint(fragment), data=payload, format='json',
+    )
+
+    assert first_response.status_code == 204
+    assert second_response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_delete_with_pre_patch_version_cannot_remove_patched_state(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article)
+    stale_delete_payload = _delete_payload(fragment)
+    api_client.force_authenticate(user=user)
+
+    patch_response = api_client.patch(
+        _endpoint(fragment),
+        data={
+            'text': 'PATCH 完成后的正文',
+            'updatedAt': fragment.updated_at.isoformat(),
+        },
+        format='json',
+    )
+    delete_response = api_client.delete(
+        _endpoint(fragment), data=stale_delete_payload, format='json',
+    )
+
+    assert patch_response.status_code == 200
+    assert delete_response.status_code == 409
+    assert delete_response.data == STATE_CONFLICT
+    fragment.refresh_from_db()
+    assert fragment.text == 'PATCH 完成后的正文'
+
+
+@pytest.mark.django_db
+def test_delete_with_pre_inference_version_cannot_remove_inferred_state(
+    api_client, user_factory, monkeypatch,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, is_confirmed=False, embedding=None)
+    stale_delete_payload = _delete_payload(fragment)
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: type('ResolvedProvider', (), {'instance': object()})(),
+    )
+    monkeypatch.setattr(
+        'examples.views.infer_tags',
+        lambda *_args, **_kwargs: {'scene_type': '推断完成'},
+    )
+    api_client.force_authenticate(user=user)
+
+    infer_response = api_client.post(
+        f'/api/examples/fragments/{fragment.id}/infer-tags/',
+        format='json',
+    )
+    delete_response = api_client.delete(
+        _endpoint(fragment), data=stale_delete_payload, format='json',
+    )
+
+    assert infer_response.status_code == 200
+    assert delete_response.status_code == 409
+    assert delete_response.data == STATE_CONFLICT
+    fragment.refresh_from_db()
+    assert fragment.tags == {'scene_type': '推断完成'}
+
+
+@pytest.mark.django_db
+def test_delete_with_pre_confirmation_version_cannot_remove_confirmed_state(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key(provider='gemini')
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    fragment = _fragment(article, is_confirmed=False, embedding=None)
+    stale_delete_payload = _delete_payload(fragment)
+    monkeypatch.setattr(
+        'examples.views.get_embedding',
+        lambda *_args, **_kwargs: [0.4] * 768,
+    )
+    api_client.force_authenticate(user=user)
+
+    confirm_response = api_client.post(
+        f'/api/examples/fragments/{fragment.id}/confirm/',
+        format='json',
+    )
+    delete_response = api_client.delete(
+        _endpoint(fragment), data=stale_delete_payload, format='json',
+    )
+
+    assert confirm_response.status_code == 200
+    assert delete_response.status_code == 409
+    assert delete_response.data == STATE_CONFLICT
+    fragment.refresh_from_db()
+    assert fragment.is_confirmed is True
+    assert list(fragment.embedding) == [0.4] * 768
