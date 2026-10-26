@@ -32,6 +32,10 @@ class FragmentPatchVersionSerializer(serializers.Serializer):
         return attrs
 
 
+class FragmentDeleteVersionSerializer(serializers.Serializer):
+    updated_at = serializers.DateTimeField()
+
+
 class ResolveConflictSerializer(serializers.Serializer):
     old_fragment_id = serializers.UUIDField()
     new_fragment_id = serializers.UUIDField()
