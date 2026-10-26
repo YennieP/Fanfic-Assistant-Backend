@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteEncryptedFanficBackupsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<BUCKET_NAME>/fanfic-production/daily/*",
+        "arn:aws:s3:::<BUCKET_NAME>/fanfic-production/weekly/*",
+        "arn:aws:s3:::<BUCKET_NAME>/fanfic-production/monthly/*"
+      ]
+    }
+  ]
+}

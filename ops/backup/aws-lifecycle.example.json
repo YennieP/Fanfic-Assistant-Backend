@@ -1,0 +1,43 @@
+{
+  "Rules": [
+    {
+      "ID": "FanficDailyRetention",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "fanfic-production/daily/"
+      },
+      "Expiration": {
+        "Days": 14
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 14
+      }
+    },
+    {
+      "ID": "FanficWeeklyRetention",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "fanfic-production/weekly/"
+      },
+      "Expiration": {
+        "Days": 56
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 56
+      }
+    },
+    {
+      "ID": "FanficMonthlyRetention",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "fanfic-production/monthly/"
+      },
+      "Expiration": {
+        "Days": 183
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 183
+      }
+    }
+  ]
+}

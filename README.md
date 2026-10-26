@@ -127,6 +127,25 @@ Railway 当前使用 Railpack。仓库同时保留 `requirements.txt` 和 uv 文
 
 Railway 服务级 Custom Start Command 已移除，生产当前读取 [Procfile](./Procfile)。deployment `16878416-6ea5-4407-a4ce-e03fd46d7eb1` 的启动日志确认 Gunicorn 使用 `gthread`，并启动 2 个 worker；仓库参数为每个 worker 4 个线程、timeout 180 秒。平台配置仍可能覆盖仓库文件，因此后续部署验收必须继续以实际 deployment 命令和启动日志为准。
 
+### 加密逻辑备份任务
+
+独立的 [Dockerfile.backup](./Dockerfile.backup) 用于 Railway cron service，不替代 web service 的 Railpack / Procfile 部署。容器固定使用 PostgreSQL 18 client，将 `pg_dump --format=custom` 的 stdout 直接送入 age X25519 公钥加密；临时目录只出现密文，上传后清除。每天写入 `daily`，UTC 周日额外写入 `weekly`，UTC 每月 1 日额外写入 `monthly`。任何 dump、加密或上传步骤失败都会以非零状态退出，不把部分执行报告为成功。
+
+数据库角色通过 [scripts/db_001_backup_reader.sql](./scripts/db_001_backup_reader.sql) 单独创建或轮换。脚本从执行进程的 `BACKUP_READER_PASSWORD` 读取密码，不包含固定凭据；角色固定为 `backup_reader`，继承 PostgreSQL `pg_read_all_data`，但保持 `NOSUPERUSER`、`NOCREATEDB`、`NOCREATEROLE`、`NOREPLICATION`、`NOBYPASSRLS`，并默认使用只读事务。production 执行必须通过 Railway 私网进入 Postgres，不能为备份重开 public TCP proxy。
+
+cron service 只配置以下变量，值不得写入仓库、日志或 PR：
+
+- `PGHOST`：必须以 `.railway.internal` 结尾
+- `PGPORT`、`PGDATABASE`、`PGPASSWORD`，以及固定值 `PGUSER=backup_reader`
+- `BACKUP_AGE_RECIPIENT`：由 Railway 外离线保存的 age identity 推导出的 X25519 公钥；cron service 永远不持有私钥
+- `BACKUP_S3_BUCKET`、`BACKUP_S3_PREFIX`、`AWS_REGION`
+- `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`；如使用短期凭据，可同时提供 `AWS_SESSION_TOKEN`
+- 非 AWS 的 S3-compatible provider 可选配 HTTPS `BACKUP_S3_ENDPOINT_URL`
+
+对象存储写入身份只允许目标 bucket 的指定 `daily` / `weekly` / `monthly` prefix 执行 `PutObject`，不授予 `GetObject`、`ListBucket` 或任何 delete 权限。AWS 最小权限示例见 [ops/backup/aws-writer-policy.example.json](./ops/backup/aws-writer-policy.example.json)。bucket owner 负责开启 versioning，并通过 [ops/backup/aws-lifecycle.example.json](./ops/backup/aws-lifecycle.example.json) 分别执行 14 天 daily、56 天 weekly、183 天 monthly 保留；日常 cron 凭据不能修改 lifecycle 或清理对象。若使用不同 prefix，应用模板前必须同步修改三条 resource/filter，不能直接保留示例占位符。
+
+部署时应创建独立 Railway service，设置 `RAILWAY_DOCKERFILE_PATH=Dockerfile.backup`、每日 UTC cron schedule 和 `restartPolicyType=NEVER`。首次手动 trigger 只验证安全日志中的 object key、密文字节数、密文 SHA-256 与成功状态；不能下载或解密 production 备份。真实恢复只能在另行授权的隔离环境中使用 Railway 外的私钥执行。
+
 任何部署相关改动都必须独立审核以下内容：
 
 - 实际 builder、Python 版本和 package manager
