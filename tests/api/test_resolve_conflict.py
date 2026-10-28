@@ -42,6 +42,13 @@ def _payload(old_fragment, new_fragment, action, edited_new_text):
     }
 
 
+def test_requires_authentication(api_client):
+    response = api_client.post(ENDPOINT, data={}, format='json')
+
+    assert response.status_code == 401
+    assert response.data['code'] == 'unauthorized'
+
+
 @pytest.mark.django_db
 def test_keep_old_deletes_new_and_appends_residual_blocks(api_client, user_factory):
     user = user_factory()
@@ -151,6 +158,7 @@ def test_rejects_invalid_action_without_writes(api_client, user_factory, action)
     )
 
     assert response.status_code == 400
+    assert response.data['code'] == 'bad_request'
     assert Fragment.objects.filter(id__in=[old_fragment.id, new_fragment.id]).count() == 2
 
 
@@ -169,6 +177,7 @@ def test_rejects_same_fragment_id_without_writes(api_client, user_factory):
     )
 
     assert response.status_code == 400
+    assert response.data['code'] == 'bad_request'
     assert Fragment.objects.filter(id=fragment.id).exists()
 
 
@@ -189,6 +198,10 @@ def test_rejects_fragments_from_different_articles_without_writes(api_client, us
     )
 
     assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_selection_invalid',
+        'detail': '新旧片段必须属于同一篇文章',
+    }
     assert Fragment.objects.filter(id__in=[old_fragment.id, new_fragment.id]).count() == 2
 
 
@@ -214,6 +227,10 @@ def test_rejects_stale_conflict_state_without_writes(
     )
 
     assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '冲突状态已变化，请刷新后重试',
+    }
     assert Fragment.objects.filter(id__in=[old_fragment.id, new_fragment.id]).count() == 2
 
 
@@ -236,6 +253,7 @@ def test_does_not_resolve_another_users_fragment(api_client, user_factory):
     )
 
     assert response.status_code == 404
+    assert response.data['code'] == 'not_found'
     assert Fragment.objects.filter(id__in=[old_fragment.id, other_new_fragment.id]).count() == 2
 
 
@@ -285,28 +303,41 @@ def test_repeated_request_does_not_create_duplicate_residuals(api_client, user_f
 
     assert first_response.status_code == 200
     assert second_response.status_code == 404
+    assert second_response.data['code'] == 'not_found'
     assert list(article.fragments.values_list('text', flat=True)) == ['共同内容\n旧版独有', '新版独有']
 
 
 @pytest.mark.django_db
-def test_rejects_stale_fragment_versions_without_writes(api_client, user_factory):
+@pytest.mark.parametrize('stale_target', ['old', 'new'])
+def test_rejects_stale_fragment_versions_without_writes(
+    api_client, user_factory, stale_target,
+):
     user = user_factory()
     character = BaseCardFactory(owner=user)
     article = _article(user, character)
     old_fragment = _fragment(article, '共同内容\n旧版独有', confirmed=True, order=1)
     new_fragment = _fragment(article, '共同内容\n新版独有', confirmed=False, order=2)
     payload = _payload(old_fragment, new_fragment, 'keepOld', new_fragment.text)
-    new_fragment.text = '并发修改后的新版'
-    new_fragment.save(update_fields=['text', 'updated_at'])
+    stale_fragment = old_fragment if stale_target == 'old' else new_fragment
+    stale_fragment.text = '并发修改后的片段'
+    stale_fragment.save(update_fields=['text', 'updated_at'])
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')
 
     assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '冲突状态已变化，请刷新后重试',
+    }
     old_fragment.refresh_from_db()
     new_fragment.refresh_from_db()
-    assert old_fragment.is_confirmed is True
-    assert new_fragment.text == '并发修改后的新版'
+    assert old_fragment.text == (
+        '并发修改后的片段' if stale_target == 'old' else '共同内容\n旧版独有'
+    )
+    assert new_fragment.text == (
+        '并发修改后的片段' if stale_target == 'new' else '共同内容\n新版独有'
+    )
     assert article.fragments.count() == 2
 
 
@@ -335,5 +366,6 @@ def test_requires_both_fragment_versions_without_writes(
     response = api_client.post(ENDPOINT, data=payload, format='json')
 
     assert response.status_code == 400
+    assert response.data['code'] == 'bad_request'
     assert Fragment.objects.filter(id=old_fragment.id).exists()
     assert Fragment.objects.filter(id=new_fragment.id).exists()
