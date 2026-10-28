@@ -70,8 +70,9 @@ def test_adopts_all_new_versions_and_appends_residuals_in_one_request(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize('stale_target', ['old', 'new'])
 def test_rejects_a_stale_pair_without_resolving_any_other_pair(
-    api_client, user_factory,
+    api_client, user_factory, stale_target,
 ):
     user = user_factory()
     character = BaseCardFactory(owner=user)
@@ -81,13 +82,18 @@ def test_rejects_a_stale_pair_without_resolving_any_other_pair(
     old_two = _fragment(article, '共同二\n旧二', confirmed=True, order=3)
     new_two = _fragment(article, '共同二\n新二', confirmed=False, order=4)
     payload = {'conflicts': [_pair(old_one, new_one), _pair(old_two, new_two)]}
-    new_two.text = '并发修改后的新版'
-    new_two.save(update_fields=['text', 'updated_at'])
+    stale_fragment = old_two if stale_target == 'old' else new_two
+    stale_fragment.text = '并发修改后的片段'
+    stale_fragment.save(update_fields=['text', 'updated_at'])
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')
 
     assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '冲突状态已变化，请刷新后重试',
+    }
     assert Fragment.objects.filter(id__in=[old_one.id, new_one.id, old_two.id, new_two.id]).count() == 4
     assert article.fragments.count() == 4
 
@@ -109,7 +115,51 @@ def test_rejects_pairs_from_different_articles_without_writes(api_client, user_f
     )
 
     assert response.status_code == 400
+    assert response.data == {
+        'code': 'fragment_selection_invalid',
+        'detail': '所有冲突片段必须属于同一篇文章',
+    }
     assert Fragment.objects.filter(id__in=[old_fragment.id, new_fragment.id]).count() == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('old_confirmed', 'new_confirmed'),
+    [(False, False), (True, True)],
+)
+def test_rejects_stale_conflict_state_without_writes(
+    api_client, user_factory, old_confirmed, new_confirmed,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_fragment = _fragment(
+        article,
+        '共同内容\n旧版',
+        confirmed=old_confirmed,
+        order=1,
+    )
+    new_fragment = _fragment(
+        article,
+        '共同内容\n新版',
+        confirmed=new_confirmed,
+        order=2,
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data={'conflicts': [_pair(old_fragment, new_fragment)]},
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == {
+        'code': 'fragment_state_conflict',
+        'detail': '冲突状态已变化，请刷新后重试',
+    }
+    assert Fragment.objects.filter(id__in=[old_fragment.id, new_fragment.id]).count() == 2
+    assert article.fragments.count() == 2
 
 
 @pytest.mark.django_db
