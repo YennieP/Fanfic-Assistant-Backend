@@ -713,20 +713,44 @@ class FragmentResolveConflictsView(APIView):
             fragments_by_id = {fragment.id: fragment for fragment in fragments}
             article_ids = {fragment.article_id for fragment in fragments}
             if None in article_ids or len(article_ids) != 1:
-                return Response({'error': '所有冲突片段必须属于同一篇文章'}, status=400)
+                return Response(
+                    {
+                        'code': 'fragment_selection_invalid',
+                        'detail': '所有冲突片段必须属于同一篇文章',
+                    },
+                    status=400,
+                )
 
             for pair in conflicts:
                 old_fragment = fragments_by_id[pair['old_fragment_id']]
                 new_fragment = fragments_by_id[pair['new_fragment_id']]
                 if old_fragment.article_id != new_fragment.article_id:
-                    return Response({'error': '新旧片段必须属于同一篇文章'}, status=400)
+                    return Response(
+                        {
+                            'code': 'fragment_selection_invalid',
+                            'detail': '新旧片段必须属于同一篇文章',
+                        },
+                        status=400,
+                    )
                 if not old_fragment.is_confirmed or new_fragment.is_confirmed:
-                    return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+                    return Response(
+                        {
+                            'code': 'fragment_state_conflict',
+                            'detail': '冲突状态已变化，请刷新后重试',
+                        },
+                        status=409,
+                    )
                 if (
                     old_fragment.updated_at != pair['old_updated_at']
                     or new_fragment.updated_at != pair['new_updated_at']
                 ):
-                    return Response({'error': '冲突状态已变化，请刷新后重试'}, status=409)
+                    return Response(
+                        {
+                            'code': 'fragment_state_conflict',
+                            'detail': '冲突状态已变化，请刷新后重试',
+                        },
+                        status=409,
+                    )
 
             article_id = next(iter(article_ids))
             max_order = (
