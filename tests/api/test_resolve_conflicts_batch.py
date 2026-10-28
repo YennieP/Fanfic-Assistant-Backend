@@ -7,6 +7,10 @@ from tests.factories import BaseCardFactory
 
 
 ENDPOINT = '/api/examples/fragments/resolve-conflicts/'
+PROTECTED_PARENT_CONFLICT = {
+    'code': 'fragment_state_conflict',
+    'detail': '片段包含关联子片段，当前操作无法安全完成',
+}
 
 
 def _article(user, character, title='测试文章'):
@@ -96,6 +100,58 @@ def test_rejects_a_stale_pair_without_resolving_any_other_pair(
     }
     assert Fragment.objects.filter(id__in=[old_one.id, new_one.id, old_two.id, new_two.id]).count() == 4
     assert article.fragments.count() == 4
+
+
+@pytest.mark.django_db
+def test_rejects_batch_when_any_delete_target_has_an_unselected_child(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_one = _fragment(article, '共同一\n旧一', confirmed=True, order=1)
+    new_one = _fragment(article, '共同一\n新一', confirmed=False, order=2)
+    old_two = _fragment(article, '共同二\n旧二', confirmed=True, order=3)
+    new_two = _fragment(article, '共同二\n新二', confirmed=False, order=4)
+    child = _fragment(article, '未参与子片段', confirmed=False, order=5)
+    child.parent_fragment = old_two
+    child.save(update_fields=['parent_fragment', 'updated_at'])
+    fragments_before = set(article.fragments.values_list('id', flat=True))
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data={'conflicts': [_pair(old_one, new_one), _pair(old_two, new_two)]},
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    assert set(article.fragments.values_list('id', flat=True)) == fragments_before
+
+
+@pytest.mark.django_db
+def test_rejects_parent_and_child_in_the_same_conflict_pair_without_writes(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_parent = _fragment(article, '共同内容\n旧版', confirmed=True, order=1)
+    new_child = _fragment(article, '共同内容\n新版', confirmed=False, order=2)
+    new_child.parent_fragment = old_parent
+    new_child.save(update_fields=['parent_fragment', 'updated_at'])
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data={'conflicts': [_pair(old_parent, new_child)]},
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    assert Fragment.objects.filter(id__in=[old_parent.id, new_child.id]).count() == 2
 
 
 @pytest.mark.django_db

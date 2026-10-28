@@ -13,6 +13,7 @@ from examples.llm_pipeline import (
     segment_article,
 )
 from examples.models import Article, Fragment
+from examples.serializers import FragmentSerializer
 from examples.views import _validate_segment_results
 from logs.models import LlmCallLog
 from tests.capacity_samples import (
@@ -21,6 +22,12 @@ from tests.capacity_samples import (
 )
 from tests.factories import BaseCardFactory
 from tests.fakes import FakeProvider
+
+
+PROTECTED_PARENT_CONFLICT = {
+    'code': 'fragment_state_conflict',
+    'detail': '片段包含关联子片段，当前操作无法安全完成',
+}
 
 
 class RecordingProvider(FakeProvider):
@@ -513,6 +520,95 @@ def test_api_replaces_old_draft_when_gap_starts_with_a_blank_line(
         article.fragments.filter(is_confirmed=False)
         .values_list('text', 'start_line', 'end_line')
     ) == [('正文', 1, 1)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rejects_parent_draft_with_unselected_nested_descendants_before_replacement(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key()
+    character = BaseCardFactory(owner=user)
+    article = Article.objects.create(
+        owner=user,
+        character=character,
+        title='父子草稿',
+        content='正文',
+    )
+    parent = _fragment(
+        article, '上一轮父草稿', confirmed=False, start=0, end=0, order=0,
+    )
+    child = _fragment(
+        article, '未参与子片段', confirmed=True, start=None, end=None, order=1,
+    )
+    child.parent_fragment = parent
+    child.save(update_fields=['parent_fragment', 'updated_at'])
+    grandchild = _fragment(
+        article, '嵌套后代', confirmed=True, start=None, end=None, order=2,
+    )
+    grandchild.parent_fragment = child
+    grandchild.save(update_fields=['parent_fragment', 'updated_at'])
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
+    monkeypatch.setattr(
+        'examples.views.segment_article',
+        lambda content, _provider, *, global_start, **_kwargs: _result_for(
+            content, global_start,
+        ),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    assert Fragment.objects.filter(id__in=[parent.id, child.id, grandchild.id]).count() == 3
+    assert article.fragments.filter(is_confirmed=False).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rejects_parent_and_child_selected_for_the_same_segment_replacement(
+    api_client, make_user_with_key, monkeypatch,
+):
+    user = make_user_with_key()
+    character = BaseCardFactory(owner=user)
+    article = Article.objects.create(
+        owner=user,
+        character=character,
+        title='同批父子草稿',
+        content='正文',
+    )
+    parent = _fragment(
+        article, '上一轮父草稿', confirmed=False, start=0, end=0, order=0,
+    )
+    child = _fragment(
+        article, '上一轮子草稿', confirmed=False, start=0, end=0, order=1,
+    )
+    child.parent_fragment = parent
+    child.save(update_fields=['parent_fragment', 'updated_at'])
+    monkeypatch.setattr(
+        'examples.views.resolve_active_provider',
+        lambda _user: SimpleNamespace(instance=object()),
+    )
+    monkeypatch.setattr(
+        'examples.views.segment_article',
+        lambda content, _provider, *, global_start, **_kwargs: _result_for(
+            content, global_start,
+        ),
+    )
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(_endpoint(article), format='json')
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    assert Fragment.objects.filter(id__in=[parent.id, child.id]).count() == 2
+    assert article.fragments.filter(is_confirmed=False).count() == 2
+
+
+def test_parent_fragment_is_read_only_until_phase_three_write_contract_exists():
+    assert FragmentSerializer().fields['parent_fragment'].read_only is True
 
 
 @pytest.mark.django_db(transaction=True)

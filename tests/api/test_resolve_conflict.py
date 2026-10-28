@@ -7,6 +7,10 @@ from tests.factories import BaseCardFactory
 
 
 ENDPOINT = '/api/examples/fragments/resolve-conflict/'
+PROTECTED_PARENT_CONFLICT = {
+    'code': 'fragment_state_conflict',
+    'detail': '片段包含关联子片段，当前操作无法安全完成',
+}
 
 
 def _article(user, character, title='测试文章'):
@@ -339,6 +343,45 @@ def test_rejects_stale_fragment_versions_without_writes(
         '并发修改后的片段' if stale_target == 'new' else '共同内容\n新版独有'
     )
     assert article.fragments.count() == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('action', ['keepOld', 'keepNew'])
+def test_rejects_discarded_parent_before_updates_or_residuals(
+    api_client, user_factory, action,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    old_fragment = _fragment(
+        article, '共同内容\n旧版独有', confirmed=True, order=1,
+    )
+    new_fragment = _fragment(
+        article, '共同内容\n新版原文', confirmed=False, order=2,
+    )
+    discarded_parent = new_fragment if action == 'keepOld' else old_fragment
+    child = _fragment(article, '未参与子片段', confirmed=False, order=3)
+    child.parent_fragment = discarded_parent
+    child.save(update_fields=['parent_fragment', 'updated_at'])
+    fragments_before = set(article.fragments.values_list('id', flat=True))
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data=_payload(
+            old_fragment,
+            new_fragment,
+            action,
+            '共同内容\n编辑后新版',
+        ),
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    new_fragment.refresh_from_db()
+    assert new_fragment.text == '共同内容\n新版原文'
+    assert set(article.fragments.values_list('id', flat=True)) == fragments_before
 
 
 @pytest.mark.django_db

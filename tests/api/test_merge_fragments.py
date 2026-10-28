@@ -7,6 +7,10 @@ from tests.factories import BaseCardFactory
 
 
 ENDPOINT = '/api/examples/fragments/merge/'
+PROTECTED_PARENT_CONFLICT = {
+    'code': 'fragment_state_conflict',
+    'detail': '片段包含关联子片段，当前操作无法安全完成',
+}
 
 
 def _article(user, character, title='测试文章'):
@@ -144,6 +148,64 @@ def test_rejects_stale_fragment_versions(api_client, user_factory, stale_target)
     delete_fragment.refresh_from_db()
     assert keep_fragment.text == ('并发修改' if stale_target == 'keep' else '一')
     assert delete_fragment.text == ('并发修改' if stale_target == 'delete' else '二')
+
+
+@pytest.mark.django_db
+def test_rejects_parent_delete_target_with_unselected_nested_descendants_without_writes(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    keep_fragment = _fragment(article, '保留', confirmed=True, order=1)
+    delete_fragment = _fragment(article, '待删父片段', confirmed=False, order=2)
+    child = _fragment(article, '未参与子片段', confirmed=False, order=3)
+    child.parent_fragment = delete_fragment
+    child.save(update_fields=['parent_fragment', 'updated_at'])
+    grandchild = _fragment(article, '嵌套后代', confirmed=False, order=4)
+    grandchild.parent_fragment = child
+    grandchild.save(update_fields=['parent_fragment', 'updated_at'])
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data=_payload(keep_fragment, delete_fragment, '不应写入的合并正文'),
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    keep_fragment.refresh_from_db()
+    assert keep_fragment.text == '保留'
+    assert Fragment.objects.filter(
+        id__in=[delete_fragment.id, child.id, grandchild.id],
+    ).count() == 3
+
+
+@pytest.mark.django_db
+def test_rejects_parent_and_child_selected_together_without_writes(
+    api_client, user_factory,
+):
+    user = user_factory()
+    character = BaseCardFactory(owner=user)
+    article = _article(user, character)
+    delete_parent = _fragment(article, '父片段', confirmed=False, order=1)
+    keep_child = _fragment(article, '子片段', confirmed=True, order=2)
+    keep_child.parent_fragment = delete_parent
+    keep_child.save(update_fields=['parent_fragment', 'updated_at'])
+    api_client.force_authenticate(user=user)
+
+    response = api_client.post(
+        ENDPOINT,
+        data=_payload(keep_child, delete_parent, '不应写入的正文'),
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert response.data == PROTECTED_PARENT_CONFLICT
+    keep_child.refresh_from_db()
+    assert keep_child.text == '子片段'
+    assert Fragment.objects.filter(id__in=[delete_parent.id, keep_child.id]).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
