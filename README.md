@@ -86,10 +86,10 @@ Windows：
 | Taxonomy | `/api/taxonomy/`, `/api/label-history/` | 双语标签体系与历史 |
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分；显式失败响应使用 `code` / `detail` |
-| Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；创建时缺少角色或正文返回 400 `missing_required_fields` 且不写入。segment 可选 `providerOverride`，会在解析 provider 前忽略纯空白缺口，再先完成、验证全部实质缺口结果并用单个短事务替换旧草稿；空正文、无效结果、保存失败分别返回 `article_content_empty`、`segmentation_result_invalid`、`segmentation_save_failed`。confirm-selected 的选择范围、片段状态、标签和 Gemini Key 显式失败分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突计入既有部分失败汇总 |
+| Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；创建时缺少角色或正文返回 400 `missing_required_fields` 且不写入。segment 可选 `providerOverride`，会在解析 provider 前忽略纯空白缺口，再先完成、验证全部实质缺口结果并用单个短事务替换旧草稿；任一待替换草稿存在子片段时返回 409 `fragment_state_conflict` 且整次零写入。空正文、无效结果、保存失败分别返回 `article_content_empty`、`segmentation_result_invalid`、`segmentation_save_failed`。confirm-selected 的选择范围、片段状态、标签和 Gemini Key 显式失败分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突计入既有部分失败汇总 |
 | Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。详情 PATCH 必须同时提供 `updatedAt` 和至少一个 `text` / `tags` 字段，用字段级条件更新避免覆盖并发状态或在删除后复活片段；详情 DELETE 也必须提供 `updatedAt`，并在短事务中锁定目标、核对版本后删除，陈旧版本或存在子片段均返回 409 `fragment_state_conflict` 且零删除。两种写入缺少或无效版本时均返回 400。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回相同 409，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
-| Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段；跨文章选择返回 400 `fragment_selection_invalid`，任一片段版本冲突返回 409 `fragment_state_conflict` |
-| Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；两种路径的跨文章选择均返回 400 `fragment_selection_invalid`，确认状态或任一片段版本冲突均返回 409 `fragment_state_conflict`；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
+| Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段；跨文章选择返回 400 `fragment_selection_invalid`，任一片段版本冲突或待删片段存在子片段时返回 409 `fragment_state_conflict`，且冲突时零写入 |
+| Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；两种路径的跨文章选择均返回 400 `fragment_selection_invalid`，确认状态、任一片段版本冲突或任一待删片段存在子片段时返回 409 `fragment_state_conflict`；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
 路由细节以各 app 的 `urls.py` 与 serializer 为准。新增或修改 endpoint 时，应同步本表和跨系统实现稿。
 
@@ -114,10 +114,12 @@ Windows：
 - Gemini 同步调用会向应用控制台日志记录容量指标（model、finish reason、prompt/completion/total/unattributed token 和输出预算），不记录 prompt、模型正文或 API Key；`unattributed` 只表示 SDK 未分类的 token，不直接等同于 thinking token。
 - `confirm-selected` 只处理请求中显式列出的、属于当前文章、状态仍可确认且包含可向量化有效标签的片段 ID；选择范围无效、片段状态变化、标签无效和缺少 Gemini Key 会在调用 embedding 前分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`，原 HTTP 状态和中文 `detail` 语义保持不变。批量和单片段 confirm 都不会在等待外部 embedding 时持有数据库锁；embedding 返回后，只在正文、标签、类型、确认状态和版本均未变化且片段仍存在时条件写入 embedding 与确认状态，因此不会覆盖并发编辑、覆盖另一确认结果或复活已删除片段。条件不满足时，批量路径把该 ID 计入既有 200 部分失败汇总并继续处理后续选择，单片段路径返回 409 `fragment_state_conflict`。逐片段向量化异常仍使用既有失败语义。旧 `confirm-all` 已在前端切换完成后退役，避免绕过显式范围约束。
 - `PATCH /api/examples/fragments/{id}/` 继续只识别 `text` 与 `tags`，并强制要求客户端同时提交 `updatedAt` 和至少一个上述可变字段；任一可变字段存在都会撤销确认并清空 embedding，成功响应仍返回推进版本后的完整 Fragment。缺少或格式无效的 `updatedAt`、空 PATCH 及仅版本 PATCH 均返回 400 且不写入；版本不匹配或读取后片段被删除返回 409 `fragment_state_conflict`，不会写入任何字段或复活记录。请求开始前已不存在及越权仍保持 404，GET 行为不变。
-- `DELETE /api/examples/fragments/{id}/` 强制要求客户端提交 `updatedAt`。后端在短事务中用 `select_for_update()` 锁定属于当前用户的目标，并在锁内核对版本和子片段关系；版本不匹配或存在 `child_fragments` 时返回 409 `fragment_state_conflict` 且不删除任何记录，当前版本且无子片段时返回 204。缺少或格式无效的版本返回 400；请求开始前已不存在、越权及重复删除保持 404。普通 DELETE 不级联删除子片段；merge、冲突处理和 segment 的父子级联规则仍不在本契约范围内。
+- `DELETE /api/examples/fragments/{id}/` 强制要求客户端提交 `updatedAt`。后端在短事务中用 `select_for_update()` 锁定属于当前用户的目标，并在锁内核对版本和子片段关系；版本不匹配或存在 `child_fragments` 时返回 409 `fragment_state_conflict` 且不删除任何记录，当前版本且无子片段时返回 204。缺少或格式无效的版本返回 400；请求开始前已不存在、越权及重复删除保持 404。普通 DELETE 不级联删除子片段。
 - 单组冲突处理必须同时提交旧、新片段的 `updated_at` 版本；版本缺失或与当前记录不一致时不会执行写入。
-- `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除，并要求提交双方 `updated_at`。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；外部 LLM 调用不在这些事务中。
-- `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
+- `resolve-conflict` 在短数据库事务内锁定双方片段，校验版本、状态及待删片段的子关系后，才完成保留片段更新、残余片段创建和舍弃片段删除。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；任一待删片段存在直接子片段时整批返回 409 且零写入。外部 LLM 调用不在这些事务中。
+- `fragments/merge` 按 UUID 顺序锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 和待删片段的子关系后，在一个短事务内更新保留片段并删除另一片段；重复、过期或父子选择不会部分写入。
+- article segment 会在全部 LLM 调用和结果验证结束后进入短事务，先锁定 Article，再按 UUID 顺序锁定实际待替换草稿；任一待删草稿存在直接子片段（包括父子同时位于替换集合）时返回 409 `fragment_state_conflict`，保留全部旧草稿且不创建新片段。
+- `FragmentSerializer.parent_fragment` 在 Phase 3 建立正式父子写入契约前保持只读；当前 API 不接受客户端创建或改写父子关系。
 - Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
 - `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表；Railway 固定使用的 `healthcheck.railway.app` Host 已显式加入允许列表，其他部署域名仍由 `ALLOWED_HOSTS` 环境变量控制。
 

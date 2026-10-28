@@ -14,11 +14,9 @@ class FragmentSerializer(serializers.ModelSerializer):
             'fragment_type', 'start_line', 'end_line',
         ]
         read_only_fields = [
-            'id', 'article', 'is_confirmed', 'order',
+            'id', 'article', 'parent_fragment', 'is_confirmed', 'order',
             'created_at', 'updated_at',
         ]
-        # character 和 parent_fragment 不再是 read_only，
-        # 允许创建父片段（character=null）时由前端控制
 
 
 class FragmentPatchVersionSerializer(serializers.Serializer):
