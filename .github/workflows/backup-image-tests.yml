@@ -1,0 +1,49 @@
+name: backup-image-tests
+
+on:
+  push:
+    paths:
+      - 'Dockerfile.backup.dockerignore'
+      - 'Dockerfile.backup'
+      - 'scripts/backup_postgres.sh'
+      - 'scripts/db_001_backup_reader.sql'
+      - 'ops/backup/**'
+      - 'tests/test_encrypted_logical_backup.py'
+      - '.github/workflows/backup-image-tests.yml'
+  pull_request:
+    paths:
+      - 'Dockerfile.backup.dockerignore'
+      - 'Dockerfile.backup'
+      - 'scripts/backup_postgres.sh'
+      - 'scripts/db_001_backup_reader.sql'
+      - 'ops/backup/**'
+      - 'tests/test_encrypted_logical_backup.py'
+      - '.github/workflows/backup-image-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-image-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build backup image
+        run: docker build --file Dockerfile.backup --tag fanfic-backup:test .
+
+      - name: Verify backup runtime
+        run: |
+          docker run --rm --entrypoint bash fanfic-backup:test -c '
+            set -euo pipefail
+            test "$(id -un)" = "postgres"
+            pg_dump --version
+            age --version
+            aws --version
+            bash -n /usr/local/bin/backup-postgres
+          '

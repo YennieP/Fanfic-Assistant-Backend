@@ -15,6 +15,7 @@ from .serializers import (
     ArticleSerializer,
     ArticleListSerializer,
     ConfirmSelectedSerializer,
+    FragmentDeleteVersionSerializer,
     FragmentPatchVersionSerializer,
     FragmentSerializer,
     MergeFragmentsSerializer,
@@ -874,8 +875,33 @@ class FragmentDetailView(APIView):
         return Response(FragmentSerializer(fragment).data)
 
     def delete(self, request, fragment_id):
-        fragment = get_object_or_404(Fragment, id=fragment_id, owner=request.user)
-        fragment.delete()
+        version_serializer = FragmentDeleteVersionSerializer(data=request.data)
+        version_serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            fragment = get_object_or_404(
+                Fragment.objects.select_for_update(),
+                id=fragment_id,
+                owner=request.user,
+            )
+            if fragment.updated_at != version_serializer.validated_data['updated_at']:
+                return Response(
+                    {
+                        'code': 'fragment_state_conflict',
+                        'detail': '片段状态已变化，请刷新后重试',
+                    },
+                    status=409,
+                )
+            if fragment.child_fragments.exists():
+                return Response(
+                    {
+                        'code': 'fragment_state_conflict',
+                        'detail': '片段状态已变化，请刷新后重试',
+                    },
+                    status=409,
+                )
+            fragment.delete()
+
         return Response(status=204)
 
 

@@ -87,7 +87,7 @@ Windows：
 | Generation | `/api/generate/stream/` | SSE 流式生成；可选 `providerOverride` 仅覆盖本次请求 |
 | Evaluation | `/api/evaluation/score/`, `/score/{id}/rate/` | LLM judge 与人工评分；显式失败响应使用 `code` / `detail` |
 | Articles | `/api/examples/articles/` | 文章 CRUD、segment，以及只处理显式片段 ID 的 confirm-selected；创建时缺少角色或正文返回 400 `missing_required_fields` 且不写入。segment 可选 `providerOverride`，会在解析 provider 前忽略纯空白缺口，再先完成、验证全部实质缺口结果并用单个短事务替换旧草稿；空正文、无效结果、保存失败分别返回 `article_content_empty`、`segmentation_result_invalid`、`segmentation_save_failed`。confirm-selected 的选择范围、片段状态、标签和 Gemini Key 显式失败分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突计入既有部分失败汇总 |
-| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。详情 PATCH 必须同时提供 `updatedAt` 和至少一个 `text` / `tags` 字段，用字段级条件更新避免覆盖并发状态或在删除后复活片段；缺少或无效版本及没有可变字段时返回 400 且不写入，版本冲突返回 409 `fragment_state_conflict`。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回相同 409，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
+| Fragments | `/api/examples/fragments/` | 片段列表；同路径 POST 创建已弃用并处于观察期；详情、infer-tags、confirm 继续支持。详情 PATCH 必须同时提供 `updatedAt` 和至少一个 `text` / `tags` 字段，用字段级条件更新避免覆盖并发状态或在删除后复活片段；详情 DELETE 也必须提供 `updatedAt`，并在短事务中锁定目标、核对版本后删除，陈旧版本或存在子片段均返回 409 `fragment_state_conflict` 且零删除。两种写入缺少或无效版本时均返回 400。infer-tags 在 LLM 返回后仅在片段输入、状态和版本未变化时写入标签，并发冲突返回相同 409，不会覆盖并发编辑、撤销并发确认或复活已删除片段。confirm 的 skip 状态、缺少或无有效值标签、缺 Gemini Key 显式失败均保持 400，分别返回 `fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`；embedding 返回后仅在片段未变化时确认，并发冲突返回 409 `fragment_state_conflict` |
 | Fragment merge | `/api/examples/fragments/merge/` | 带版本校验地原子更新保留片段并删除另一片段；跨文章选择返回 400 `fragment_selection_invalid`，任一片段版本冲突返回 409 `fragment_state_conflict` |
 | Conflict resolution | `/api/examples/fragments/resolve-conflict/`, `/resolve-conflicts/` | 单组与批量处理均要求双方版本；单组跨文章选择返回 400 `fragment_selection_invalid`，确认状态或任一片段版本冲突返回 409 `fragment_state_conflict`；批量接口在一个事务中采用全部新版，任一冲突无效则整体不写入 |
 
@@ -113,7 +113,8 @@ Windows：
 - 文章自动切割当前使用 4000 输出 token 上限；生产容量验收确认 2000 会在接近 chunk 上限的高行密度输入上耗尽并截断 JSON。该值是调用上限，不代表每次固定消耗 4000 token。
 - Gemini 同步调用会向应用控制台日志记录容量指标（model、finish reason、prompt/completion/total/unattributed token 和输出预算），不记录 prompt、模型正文或 API Key；`unattributed` 只表示 SDK 未分类的 token，不直接等同于 thinking token。
 - `confirm-selected` 只处理请求中显式列出的、属于当前文章、状态仍可确认且包含可向量化有效标签的片段 ID；选择范围无效、片段状态变化、标签无效和缺少 Gemini Key 会在调用 embedding 前分别返回 `fragment_selection_invalid`、`fragment_state_conflict`、`fragment_tags_invalid`、`no_api_key`，原 HTTP 状态和中文 `detail` 语义保持不变。批量和单片段 confirm 都不会在等待外部 embedding 时持有数据库锁；embedding 返回后，只在正文、标签、类型、确认状态和版本均未变化且片段仍存在时条件写入 embedding 与确认状态，因此不会覆盖并发编辑、覆盖另一确认结果或复活已删除片段。条件不满足时，批量路径把该 ID 计入既有 200 部分失败汇总并继续处理后续选择，单片段路径返回 409 `fragment_state_conflict`。逐片段向量化异常仍使用既有失败语义。旧 `confirm-all` 已在前端切换完成后退役，避免绕过显式范围约束。
-- `PATCH /api/examples/fragments/{id}/` 继续只识别 `text` 与 `tags`，并强制要求客户端同时提交 `updatedAt` 和至少一个上述可变字段；任一可变字段存在都会撤销确认并清空 embedding，成功响应仍返回推进版本后的完整 Fragment。缺少或格式无效的 `updatedAt`、空 PATCH 及仅版本 PATCH 均返回 400 且不写入；版本不匹配或读取后片段被删除返回 409 `fragment_state_conflict`，不会写入任何字段或复活记录。请求开始前已不存在及越权仍保持 404，GET 与 DELETE 行为不变。
+- `PATCH /api/examples/fragments/{id}/` 继续只识别 `text` 与 `tags`，并强制要求客户端同时提交 `updatedAt` 和至少一个上述可变字段；任一可变字段存在都会撤销确认并清空 embedding，成功响应仍返回推进版本后的完整 Fragment。缺少或格式无效的 `updatedAt`、空 PATCH 及仅版本 PATCH 均返回 400 且不写入；版本不匹配或读取后片段被删除返回 409 `fragment_state_conflict`，不会写入任何字段或复活记录。请求开始前已不存在及越权仍保持 404，GET 行为不变。
+- `DELETE /api/examples/fragments/{id}/` 强制要求客户端提交 `updatedAt`。后端在短事务中用 `select_for_update()` 锁定属于当前用户的目标，并在锁内核对版本和子片段关系；版本不匹配或存在 `child_fragments` 时返回 409 `fragment_state_conflict` 且不删除任何记录，当前版本且无子片段时返回 204。缺少或格式无效的版本返回 400；请求开始前已不存在、越权及重复删除保持 404。普通 DELETE 不级联删除子片段；merge、冲突处理和 segment 的父子级联规则仍不在本契约范围内。
 - 单组冲突处理必须同时提交旧、新片段的 `updated_at` 版本；版本缺失或与当前记录不一致时不会执行写入。
 - `resolve-conflict` 在短数据库事务内完成保留片段更新、残余片段创建和舍弃片段删除，并要求提交双方 `updated_at`。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；外部 LLM 调用不在这些事务中。
 - `fragments/merge` 锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 后在一个短事务内更新保留片段并删除另一片段；重复或过期请求不会部分写入。
@@ -125,6 +126,25 @@ Windows：
 Railway 当前使用 Railpack。仓库同时保留 `requirements.txt` 和 uv 文件时，Railpack 优先执行 `pip install -r requirements.txt`；`.python-version` 将生产 Python 固定为 3.12。`requirements.txt` 必须始终包含 Gunicorn，不能依赖 uv 的可选依赖组。
 
 Railway 服务级 Custom Start Command 已移除，生产当前读取 [Procfile](./Procfile)。deployment `16878416-6ea5-4407-a4ce-e03fd46d7eb1` 的启动日志确认 Gunicorn 使用 `gthread`，并启动 2 个 worker；仓库参数为每个 worker 4 个线程、timeout 180 秒。平台配置仍可能覆盖仓库文件，因此后续部署验收必须继续以实际 deployment 命令和启动日志为准。
+
+### 加密逻辑备份任务
+
+独立的 [Dockerfile.backup](./Dockerfile.backup) 用于 Railway cron service，不替代 web service 的 Railpack / Procfile 部署。容器固定使用 PostgreSQL 18 client，将 `pg_dump --format=custom` 的 stdout 直接送入 age X25519 公钥加密；临时目录只出现密文，上传后清除。每天写入 `daily`，UTC 周日额外写入 `weekly`，UTC 每月 1 日额外写入 `monthly`。任何 dump、加密或上传步骤失败都会以非零状态退出，不把部分执行报告为成功。
+
+数据库角色通过 [scripts/db_001_backup_reader.sql](./scripts/db_001_backup_reader.sql) 单独创建或轮换。脚本从执行进程的 `BACKUP_READER_PASSWORD` 读取密码，不包含固定凭据；角色固定为 `backup_reader`，继承 PostgreSQL `pg_read_all_data`，但保持 `NOSUPERUSER`、`NOCREATEDB`、`NOCREATEROLE`、`NOREPLICATION`、`NOBYPASSRLS`，并默认使用只读事务。production 执行必须通过 Railway 私网进入 Postgres，不能为备份重开 public TCP proxy。
+
+cron service 只配置以下变量，值不得写入仓库、日志或 PR：
+
+- `PGHOST`：必须以 `.railway.internal` 结尾
+- `PGPORT`、`PGDATABASE`、`PGPASSWORD`，以及固定值 `PGUSER=backup_reader`
+- `BACKUP_AGE_RECIPIENT`：由 Railway 外离线保存的 age identity 推导出的 X25519 公钥；cron service 永远不持有私钥
+- `BACKUP_S3_BUCKET`、`BACKUP_S3_PREFIX`、`AWS_REGION`
+- `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`；如使用短期凭据，可同时提供 `AWS_SESSION_TOKEN`
+- 非 AWS 的 S3-compatible provider 可选配 HTTPS `BACKUP_S3_ENDPOINT_URL`
+
+对象存储写入身份只允许目标 bucket 的指定 `daily` / `weekly` / `monthly` prefix 执行 `PutObject`，不授予 `GetObject`、`ListBucket` 或任何 delete 权限。AWS 最小权限示例见 [ops/backup/aws-writer-policy.example.json](./ops/backup/aws-writer-policy.example.json)。bucket owner 负责开启 versioning，并通过 [ops/backup/aws-lifecycle.example.json](./ops/backup/aws-lifecycle.example.json) 分别执行 14 天 daily、56 天 weekly、183 天 monthly 保留；日常 cron 凭据不能修改 lifecycle 或清理对象。若使用不同 prefix，应用模板前必须同步修改三条 resource/filter，不能直接保留示例占位符。
+
+部署时应创建独立 Railway service，设置 `RAILWAY_DOCKERFILE_PATH=Dockerfile.backup`、每日 UTC cron schedule 和 `restartPolicyType=NEVER`。首次手动 trigger 只验证安全日志中的 object key、密文字节数、密文 SHA-256 与成功状态；不能下载或解密 production 备份。真实恢复只能在另行授权的隔离环境中使用 Railway 外的私钥执行。
 
 任何部署相关改动都必须独立审核以下内容：
 
