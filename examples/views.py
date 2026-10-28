@@ -29,6 +29,23 @@ from generation.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
 
+PROTECTED_PARENT_FRAGMENT_DETAIL = '片段包含关联子片段，当前操作无法安全完成'
+
+
+def _has_protected_child_fragments(fragment_ids) -> bool:
+    """检查待删片段是否仍被直接子片段引用。"""
+    return Fragment.objects.filter(parent_fragment_id__in=fragment_ids).exists()
+
+
+def _protected_parent_fragment_response() -> Response:
+    return Response(
+        {
+            'code': 'fragment_state_conflict',
+            'detail': PROTECTED_PARENT_FRAGMENT_DETAIL,
+        },
+        status=409,
+    )
+
 
 def _apply_inferred_tags_if_unchanged(fragment: Fragment, tags: dict) -> bool:
     """只在标签推断期间片段未变化时提交推断结果。"""
@@ -422,9 +439,17 @@ class ArticleSegmentView(APIView):
                     id=article.id,
                     owner=request.user,
                 )
-                locked_article.fragments.filter(
-                    is_confirmed=False,
-                ).filter(replacement_range).delete()
+                replacement_fragments = list(
+                    locked_article.fragments.select_for_update()
+                    .filter(is_confirmed=False)
+                    .filter(replacement_range)
+                    .order_by('id')
+                )
+                replacement_ids = [fragment.id for fragment in replacement_fragments]
+                if _has_protected_child_fragments(replacement_ids):
+                    return _protected_parent_fragment_response()
+
+                Fragment.objects.filter(id__in=replacement_ids).delete()
                 Fragment.objects.bulk_create(pending_fragments)
         except Exception:
             logger.exception('Failed to replace segmented drafts for article %s', article.id)
@@ -643,6 +668,10 @@ class FragmentResolveConflictView(APIView):
                 preserved_text = edited_new_text
                 discarded_text = old_fragment.text
 
+            if _has_protected_child_fragments([discarded_fragment.id]):
+                return _protected_parent_fragment_response()
+
+            if action != 'keepOld':
                 if edited_new_text != new_fragment.text:
                     new_fragment.text = edited_new_text
                     new_fragment.is_confirmed = False
@@ -752,6 +781,13 @@ class FragmentResolveConflictsView(APIView):
                         status=409,
                     )
 
+            old_ids = [
+                fragments_by_id[pair['old_fragment_id']].id
+                for pair in conflicts
+            ]
+            if _has_protected_child_fragments(old_ids):
+                return _protected_parent_fragment_response()
+
             article_id = next(iter(article_ids))
             max_order = (
                 Fragment.objects.filter(article_id=article_id)
@@ -759,12 +795,9 @@ class FragmentResolveConflictsView(APIView):
             )
             next_order = max(max_order if max_order is not None else 0, 0) + 1
             residual_fragments: list[Fragment] = []
-            old_ids = []
-
             for pair in conflicts:
                 old_fragment = fragments_by_id[pair['old_fragment_id']]
                 new_fragment = fragments_by_id[pair['new_fragment_id']]
-                old_ids.append(old_fragment.id)
                 for text in _extract_residuals(new_fragment.text, old_fragment.text):
                     residual_fragments.append(Fragment(
                         owner=request.user,
@@ -839,6 +872,9 @@ class FragmentMergeView(APIView):
                     },
                     status=409,
                 )
+
+            if _has_protected_child_fragments([delete_fragment.id]):
+                return _protected_parent_fragment_response()
 
             keep_fragment.text = data['merged_text']
             keep_fragment.is_confirmed = False
