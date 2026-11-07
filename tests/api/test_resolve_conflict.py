@@ -3,6 +3,7 @@
 import pytest
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -323,8 +324,10 @@ def test_rejects_stale_fragment_versions_without_writes(
     new_fragment = _fragment(article, '共同内容\n新版独有', confirmed=False, order=2)
     payload = _payload(old_fragment, new_fragment, 'keepOld', new_fragment.text)
     stale_fragment = old_fragment if stale_target == 'old' else new_fragment
-    stale_fragment.text = '并发修改后的片段'
-    stale_fragment.save(update_fields=['text', 'updated_at'])
+    Fragment.objects.filter(id=stale_fragment.id).update(
+        text='并发修改后的片段',
+        updated_at=concurrent_updated_at(stale_fragment.updated_at),
+    )
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')

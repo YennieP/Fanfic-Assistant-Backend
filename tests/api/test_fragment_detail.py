@@ -3,9 +3,9 @@
 import pytest
 from django.db.models.query import QuerySet
 from django.utils.dateparse import parse_datetime
-from django.utils import timezone
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -195,7 +195,7 @@ def test_rejects_concurrent_text_and_layout_change_without_overwriting_it(
             fragment_type='skip',
             start_line=8,
             end_line=9,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
 
     was_triggered = _run_after_fragment_read(monkeypatch, fragment, concurrent_change)
@@ -235,7 +235,7 @@ def test_rejects_concurrent_tag_change_without_overwriting_it(
     def concurrent_change():
         Fragment.objects.filter(id=fragment.id).update(
             tags=concurrent_tags,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
 
     _run_after_fragment_read(monkeypatch, fragment, concurrent_change)
@@ -413,7 +413,7 @@ def test_delete_rejects_stale_version_without_deleting(api_client, user_factory)
     payload = _delete_payload(fragment)
     Fragment.objects.filter(id=fragment.id).update(
         text='并发修改后的正文',
-        updated_at=timezone.now(),
+        updated_at=concurrent_updated_at(fragment.updated_at),
     )
     api_client.force_authenticate(user=user)
 
