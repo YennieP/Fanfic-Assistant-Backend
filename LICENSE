@@ -1,9 +1,7 @@
 Copyright (c) 2026 Yanxi Pan. All rights reserved.
 
-Fanfic Assistant Backend is publicly available for viewing and reviewing the
-author's personal portfolio. Public availability does not grant a general
-license to reuse the code or documentation, and this project is not offered
-under an open-source license.
+Public availability does not grant a general license to reuse the code or
+documentation. This project is not offered under an open-source license.
 
 Except as permitted by applicable law or the hosting platform's terms, no
 permission is granted to copy, modify, distribute, sublicense, sell, or reuse
@@ -23,8 +21,8 @@ This notice applies only to original material owned by Yanxi Pan. Third-party
 dependencies and material remain subject to their respective licenses;
 this notice does not replace or restrict those licenses.
 
-For permission beyond viewing and portfolio review, contact the copyright
-holder through the repository owner's GitHub profile:
+For permission to reuse the original material, contact the copyright holder
+through the repository owner's GitHub profile:
 https://github.com/YennieP
 
 THE MATERIAL IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR

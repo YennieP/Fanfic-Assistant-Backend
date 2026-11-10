@@ -160,14 +160,14 @@ cron service 只配置以下变量，值不得写入仓库、日志或 PR：
 
 ## License / Author
 
-Personal portfolio project by Yanxi Pan.
+Author: Yanxi Pan.
 
 Copyright (c) 2026 Yanxi Pan. All rights reserved. See [LICENSE](./LICENSE).
 
-本仓库公开用于作品集展示和代码审阅，采用版权保留声明，不采用开源许可证。
+本仓库采用版权保留声明，不采用开源许可证。
 除适用法律或 GitHub 平台条款允许的范围外，将原创代码或文档用于其他项目、修改或再分发须事先获得作者书面许可；商业和非商业复用均不自动获得授权。
 GitHub 平台内的查看与 fork 权限，以及第三方依赖和素材各自的许可证，仍然有效。
 
-Public visibility supports portfolio review; it does not grant a general
-reuse license. GitHub platform permissions and third-party licenses remain
+Public availability does not grant a general reuse license.
+GitHub platform permissions and third-party licenses remain
 in effect. The full notice and permission contact are in [LICENSE](./LICENSE).
