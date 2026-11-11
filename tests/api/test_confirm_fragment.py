@@ -1,9 +1,9 @@
 """单片段向量化确认的错误契约与并发写入边界测试。"""
 
 import pytest
-from django.utils import timezone
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -177,7 +177,7 @@ def test_rejects_a_concurrent_edit_without_overwriting_it(
             text='并发修改后的正文',
             tags={'scene_type': '争执'},
             fragment_type='skip',
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return [0.1] * 768
 
@@ -212,7 +212,7 @@ def test_rejects_a_concurrent_confirmation_without_replacing_its_embedding(
         Fragment.objects.filter(id=fragment.id).update(
             embedding=[0.2] * 768,
             is_confirmed=True,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return [0.1] * 768
 

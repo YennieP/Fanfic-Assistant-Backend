@@ -34,7 +34,7 @@ if (-not (Test-Path -PathType Leaf $UvBin)) {
 
 $UvVersionOutput = (& $UvBin --version)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$InstalledUvVersion = ($UvVersionOutput -split '\\s+')[1]
+$InstalledUvVersion = ([string]$UvVersionOutput -split '\s+')[1]
 if ($InstalledUvVersion -ne $UvVersion) {
     throw "Project-local uv version mismatch; expected $UvVersion."
 }
