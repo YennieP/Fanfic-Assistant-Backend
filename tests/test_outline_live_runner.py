@@ -955,3 +955,147 @@ def test_repeated_member_names_in_distinct_objects_remain_valid(pack, storage):
             hashlib.sha256(meta["response_body_utf8"].encode()).hexdigest()
             == meta["response_sha256"]
         )
+
+
+@pytest.mark.parametrize(
+    "endpoint,location,codepoint",
+    [
+        (endpoint, location, point)
+        for endpoint in ("countTokens", "generateContent")
+        for location in ("value", "key", "nested", "list")
+        for point in (0xD800, 0xDFFF)
+    ]
+    + [
+        ("generateContent", location, point)
+        for location in ("text", "version")
+        for point in (0xD800, 0xDFFF)
+    ],
+    ids=[
+        f"{endpoint}-{location}-{point:x}"
+        for endpoint in ("countTokens", "generateContent")
+        for location in ("value", "key", "nested", "list")
+        for point in (0xD800, 0xDFFF)
+    ]
+    + [
+        f"generateContent-{location}-{point:x}"
+        for location in ("text", "version")
+        for point in (0xD800, 0xDFFF)
+    ],
+)
+def test_unpaired_unicode_response_has_safe_terminal_receipt(
+    pack, storage, monkeypatch, capsys, endpoint, location, codepoint
+):
+    live = module()
+    plan, data = approved_plan(pack, storage)
+    data["credential_source"] = "experiment_env"
+    plan.write_text(json.dumps(data))
+    monkeypatch.setenv("FANFIC_EXPERIMENT_GEMINI_API_KEY", KEY)
+    captured = []
+
+    def malformed(req, response, net):
+        if req.url.path.endswith(":" + endpoint):
+            value = response.json()
+            invalid = chr(codepoint)
+            if location == "value":
+                value["extra"] = invalid
+            elif location == "key":
+                value[invalid] = "extra"
+            elif location == "nested":
+                value["extra"] = {"inner": invalid}
+            elif location == "list":
+                value["extra"] = [KEY, invalid]
+            elif location == "text":
+                value["candidates"][0]["content"]["parts"][0]["text"] += invalid
+            else:
+                value["modelVersion"] += invalid
+            raw = json.dumps(value).encode()
+            captured.append(raw)
+            return httpx.Response(200, content=raw)
+        return response
+
+    net = Network(malformed)
+    actual_transport = live.GeminiTransport
+    monkeypatch.setattr(
+        live,
+        "GeminiTransport",
+        lambda key, timeout, factory=None: actual_transport(key, timeout, net.factory),
+    )
+    code = live.main(
+        [
+            "--execute",
+            "--task-dir",
+            str(pack),
+            "--execution-plan",
+            str(plan),
+            "--output-root",
+            str(storage / "runs"),
+        ]
+    )
+    summary = json.loads(capsys.readouterr().out)
+    receipt = json.loads(Path(summary["receipt"]).read_text())
+    expected = 1 if endpoint == "countTokens" else 3
+    assert code == summary["exit_code"] == receipt["exit_code"] == 1
+    assert summary["error_code"] == "provider_response_invalid"
+    assert receipt["http_requests_attempted"] == len(net.requests) == expected
+    assert receipt["model_generation_requests_attempted"] == (expected - 1) // 2
+    assert len(receipt["results"]) == 2
+    assert {row["condition"] for row in receipt["results"]} == {"D0", "A1"}
+    assert not receipt["comparable_pair"]
+    assert receipt["estimated_cost_usd"] is None
+    assert receipt["cost_estimate_complete"] is False
+    run = Path(summary["receipt"]).parents[1]
+    assert len(list((run / "internal/requests").glob("*-started.json"))) == expected
+    assert (
+        live.base.RUNTIME_ROOT
+        / "outline-execution-claims"
+        / data["authorization_id"]
+        / "claim.json"
+    ).is_file()
+    meta = json.loads((run / f"internal/requests/{expected}-response.json").read_text())
+    assert meta["http_status"] == 200
+    assert meta["response_bytes"] == len(captured[0])
+    assert meta["response_sha256"] == hashlib.sha256(captured[0]).hexdigest()
+    assert "response_json" not in meta and "response_body_utf8" not in meta
+    for path in run.rglob("*"):
+        if path.is_file():
+            assert KEY.encode() not in path.read_bytes()
+    rows = {row["status"]: row["attempt"] for row in receipt["results"]}
+    if endpoint == "generateContent":
+        assert rows == {"request_failed": 1, "not_attempted": 0}
+    else:
+        assert rows == {"not_attempted": 0}
+
+
+@pytest.mark.parametrize("ensure_ascii", [True, False], ids=["escaped", "utf8"])
+def test_valid_emoji_strings_preserve_raw_bytes_and_model_text(
+    pack, storage, ensure_ascii
+):
+    plan, _ = approved_plan(pack, storage)
+    raw_by_group = {}
+
+    def emoji(req, response, net):
+        value = response.json()
+        value["emoji😀"] = {"list": ["😀"]}
+        if req.url.path.endswith(":generateContent"):
+            part = value["candidates"][0]["content"]["parts"][0]
+            part["text"] += "😀"
+            group = "A1" if "CONTEXT_MAP" in req.content.decode() else "D0"
+            raw_by_group[group] = part["text"]
+        return httpx.Response(
+            200, content=json.dumps(value, ensure_ascii=ensure_ascii).encode()
+        )
+
+    net = Network(emoji)
+    result, receipt = execute(pack, storage, plan, net)
+    assert result["exit_code"] == 0 and receipt["comparable_pair"]
+    assert len(net.requests) == 4
+    run = Path(result["receipt"]).parents[1]
+    for group, text in raw_by_group.items():
+        assert (run / f"internal/raw/{group}.txt").read_text() == text
+    for path in (run / "internal/requests").glob("*-response.json"):
+        meta = json.loads(path.read_text())
+        assert meta["response_json"]["emoji😀"] == {"list": ["😀"]}
+        assert (
+            hashlib.sha256(meta["response_body_utf8"].encode()).hexdigest()
+            == meta["response_sha256"]
+        )

@@ -90,7 +90,7 @@ TASK-002 的冻结输入、评价、协议及原 manifest 不回写。原 manife
 
 ### 输出与实际执行
 
-计划确认、Key 就绪后才保存私人输入快照和构造客户端。每次尝试在 dispatch 前独占保存 `internal/requests/N-started.json`，之后保存响应状态、字节数、原始摘要及可安全保留的原始 UTF-8 body/JSON；明确的 HTTP 错误或无效 JSON 可能回显 Key，仅留状态/大小/hash。同一 JSON 对象中的重复字段（包括嵌套对象和转义后同名的字段）视为歧义响应，在响应正文或解析对象落盘前以 `provider_response_invalid` 拒绝，仅留状态/大小/hash，并停止剩余请求；不同对象可以各自使用相同字段名。有效 JSON 回显本次 Key 时保存脱敏 trace 并使该次失败，不保存原秘密。网络响应最多 1 MiB，拒绝压缩响应，记录 HTTPX 各 I/O 阶段 timeout 和流读取中的耗时截止检查；这不承诺全链路硬墙钟 deadline。
+计划确认、Key 就绪后才保存私人输入快照和构造客户端。每次尝试在 dispatch 前独占保存 `internal/requests/N-started.json`，之后保存响应状态、字节数、原始摘要及可安全保留的原始 UTF-8 body/JSON；明确的 HTTP 错误或无效 JSON 可能回显 Key，仅留状态/大小/hash。同一 JSON 对象中的重复字段（包括嵌套对象和转义后同名的字段）视为歧义响应，在响应正文或解析对象落盘前以 `provider_response_invalid` 拒绝，仅留状态/大小/hash，并停止剩余请求；不同对象可以各自使用相同字段名。解析后的所有字符串（含字段名、嵌套值和数组项）在同一遍历中验证 UTF-8 可编码性；孤立 surrogate 即使以合法 ASCII 转义传来，也在响应落盘前按 `provider_response_invalid` 拒绝，保留真实尝试、未知费用与终态回执。合法 emoji、有效 surrogate pair 和普通中文原样保留。有效 JSON 回显本次 Key 时保存脱敏 trace 并使该次失败，不保存原秘密。网络响应最多 1 MiB，拒绝压缩响应，记录 HTTPX 各 I/O 阶段 timeout 和流读取中的耗时截止检查；这不承诺全链路硬墙钟 deadline。
 
 生成成功/拒答/截断/解析失败的原文与 review/index/receipt 共用合成 runner 的区块拆分和盲化分类：A1 未可靠拆分均保守标 degraded；成功拆分才只展示 final、标 intact。源文件后来变化会使整对不可比较，不改写源文件或快照。request journal 的“attempted”不证明 provider 已接受或收费；若末尾产物写入失败，CLI 以请求数 unknown 返回，须检查原 claim/journal，不能按 0 重跑。
 

@@ -19,11 +19,14 @@ class TransportError(Exception):
 
 
 def redact(value, key):
+    """Validate decoded response strings and redact identifiable credentials."""
     found = False
 
     def visit(v):
         nonlocal found
         if isinstance(v, str):
+            # JSON escapes may decode to lone surrogates despite UTF-8 wire bytes.
+            v.encode("utf-8")
             if key in v:
                 found = True
                 return v.replace(key, "[REDACTED_CREDENTIAL]")
