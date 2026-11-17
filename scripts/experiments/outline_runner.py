@@ -139,7 +139,7 @@ def parse_condition_templates(text: str) -> dict[str, str]:
     return templates
 
 
-def load_task(task_dir: Path) -> dict[str, Any]:
+def load_task(task_dir: Path, *, private_manifest_sha256: str | None = None) -> dict[str, Any]:
     directory = task_dir.absolute()
     manifest_bytes = read_regular(directory / 'manifest.json')
     manifest = object_json(manifest_bytes, 'invalid_manifest')
@@ -149,7 +149,10 @@ def load_task(task_dir: Path) -> dict[str, Any]:
     if not isinstance(provenance, dict):
         raise GuardError('invalid_provenance')
     # Reject private packs before reading common-input or any response fixture.
-    if provenance.get('source_type') not in ('synthetic', 'synthetic_fixture'):
+    source_type = provenance.get('source_type')
+    private_allowed = (source_type == 'author_private_outline_minimal_extract'
+                       and private_manifest_sha256 == digest(manifest_bytes))
+    if source_type not in ('synthetic', 'synthetic_fixture') and not private_allowed:
         raise GuardError('synthetic_task_required')
     if (
         type(manifest.get('schema_version')) is not int
@@ -210,6 +213,7 @@ def load_task(task_dir: Path) -> dict[str, Any]:
     templates = parse_condition_templates(frozen['generation-conditions.md'].decode())
     return {
         'id': task_id, 'directory': directory, 'manifest_hash': digest(manifest_bytes),
+        'manifest_bytes': manifest_bytes,
         'files': frozen, 'hashes': hashes, 'system': templates['shared'],
         'tails': {group: templates[group] for group in GROUPS},
     }
@@ -243,6 +247,26 @@ def split_context_map(text: str) -> tuple[str, str]:
         raise GuardError('empty_output_block')
     # Preserve each captured body exactly; remove only structural marker lines.
     return context, outline
+
+
+def prepare_review_output(group: str, response: dict[str, Any], max_output_tokens: int):
+    """Share classification and process isolation between fake and live runs."""
+    state = {'status': response['status'], 'blinding': 'degraded' if group == 'A1' else 'intact'}
+    if response['status'] == 'ok' and response['finish_reason'] == 'ERROR':
+        state.update(status='finish_error', error_code='error_finish_reason')
+    elif response['status'] == 'ok' and (response['finish_reason'] == 'MAX_TOKENS'
+            or response['usage']['output_tokens'] > max_output_tokens):
+        state['status'] = 'truncated'
+    final, context = response['text'], None
+    if state['status'] == 'ok' and not final.strip():
+        state['status'] = 'empty_response'
+    if group == 'A1' and state['status'] == 'ok':
+        try:
+            context, final = split_context_map(final)
+            state['blinding'] = 'intact'
+        except GuardError as error:
+            state.update(status='parse_error', error_code=str(error), blinding='degraded')
+    return state, final, context
 
 
 class FakeProvider:
@@ -354,24 +378,10 @@ def run_pair(
                 'latency_source': 'local_fake_call', 'output_sha256': digest(raw),
                 'output_bytes': len(raw), 'blinding': 'degraded' if group == 'A1' else 'intact',
             }
-            if response['status'] == 'ok' and response['finish_reason'] == 'ERROR':
-                result.update(status='finish_error', error_code='error_finish_reason')
-            elif response['status'] == 'ok' and (
-                response['finish_reason'] == 'MAX_TOKENS'
-                or response['usage']['output_tokens'] > max_output_tokens
-            ):
-                result['status'] = 'truncated'
-            final = response['text']
-            if result['status'] == 'ok' and not final.strip():
-                result['status'] = 'empty_response'
-            if group == 'A1' and result['status'] == 'ok':
-                try:
-                    context, final = split_context_map(final)
-                    write_new(run_dir / 'internal' / 'context-map.txt', context.encode())
-                    result['blinding'] = 'intact'
-                except GuardError as error:
-                    result.update(status='parse_error', error_code=str(error), blinding='degraded')
-                    final = response['text']
+            state, final, context = prepare_review_output(group, response, max_output_tokens)
+            result.update(state)
+            if context is not None:
+                write_new(run_dir / 'internal' / 'context-map.txt', context.encode())
             neutral_id = secrets.token_hex(8)
             result['output_id'] = neutral_id
             # Failed and partial output remains readable, but is not a valid pair.
