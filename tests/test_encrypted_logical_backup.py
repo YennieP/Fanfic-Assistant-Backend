@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,18 @@ WRITER_POLICY = ROOT / "ops" / "backup" / "aws-writer-policy.example.json"
 LIFECYCLE_POLICY = ROOT / "ops" / "backup" / "aws-lifecycle.example.json"
 ROOT_DOCKERIGNORE = ROOT / ".dockerignore"
 BACKUP_DOCKERIGNORE = ROOT / "Dockerfile.backup.dockerignore"
+
+
+#: 备份 worker 只在 Debian 容器里运行，这组用例是围绕它写的：
+#: _backup_env 构造的是冒号分隔的 POSIX PATH，假二进制靠 #!/bin/sh 和执行位生效。
+#: Windows 上冒号分隔无法表达盘符路径，chmod 的执行位是空操作，
+#: PATH 上的 bash 还可能解析到 WSL 存根（报 RPC 错误而不是跑脚本）——
+#: 其中三个用例断言的是「非零退出」，于是会以通过的形式静默放过。
+#: 因此在非 POSIX 平台显式跳过；CI 的 ubuntu-24.04 仍然完整执行这组用例。
+requires_posix_shell = pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bash") is None,
+    reason="backup_postgres.sh 的端到端用例需要 POSIX shell 环境",
+)
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -154,6 +169,7 @@ def _captured_arguments(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+@requires_posix_shell
 def test_daily_backup_streams_pg_dump_into_age_and_uploads_only_ciphertext(tmp_path):
     result, capture_dir, temp_dir, env = _run_backup(tmp_path)
 
@@ -195,6 +211,7 @@ def test_daily_backup_streams_pg_dump_into_age_and_uploads_only_ciphertext(tmp_p
     assert not list(temp_dir.iterdir())
 
 
+@requires_posix_shell
 def test_sunday_month_start_also_writes_weekly_and_monthly_copies(tmp_path):
     result, capture_dir, _temp_dir, _env = _run_backup(
         tmp_path,
@@ -221,6 +238,7 @@ def test_sunday_month_start_also_writes_weekly_and_monthly_copies(tmp_path):
     ]
 
 
+@requires_posix_shell
 def test_pg_dump_failure_never_uploads_and_cleans_temporary_ciphertext(tmp_path):
     result, capture_dir, temp_dir, _env = _run_backup(
         tmp_path,
@@ -233,6 +251,7 @@ def test_pg_dump_failure_never_uploads_and_cleans_temporary_ciphertext(tmp_path)
     assert "backup_completed" not in result.stdout
 
 
+@requires_posix_shell
 def test_missing_or_invalid_configuration_fails_before_dump(tmp_path):
     result, capture_dir, _temp_dir, env = _run_backup(
         tmp_path,
@@ -247,6 +266,7 @@ def test_missing_or_invalid_configuration_fails_before_dump(tmp_path):
     assert env["AWS_SECRET_ACCESS_KEY"] not in combined_output
 
 
+@requires_posix_shell
 def test_public_database_host_or_non_backup_role_is_rejected(tmp_path):
     for unsafe_configuration in (
         {"PGHOST": "public.proxy.example", "PGUSER": "backup_reader"},
@@ -263,6 +283,7 @@ def test_public_database_host_or_non_backup_role_is_rejected(tmp_path):
         assert not (capture_dir / "pg_dump.args").exists()
 
 
+@requires_posix_shell
 def test_upload_failure_is_not_reported_as_success_and_cleans_ciphertext(tmp_path):
     result, _capture_dir, temp_dir, _env = _run_backup(
         tmp_path,

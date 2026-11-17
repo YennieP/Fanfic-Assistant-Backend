@@ -1,9 +1,9 @@
 """显式片段列表批量入库接口的范围与失败语义测试。"""
 
 import pytest
-from django.utils import timezone
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -255,7 +255,7 @@ def test_reports_a_concurrent_edit_as_failed_without_overwriting_it(
                 text='并发修改后的正文',
                 tags={'scene_type': '争执'},
                 fragment_type='skip',
-                updated_at=timezone.now(),
+                updated_at=concurrent_updated_at(edited.updated_at),
             )
         return [0.1] * 768
 
@@ -298,7 +298,7 @@ def test_reports_a_concurrent_confirmation_as_failed_without_replacing_its_embed
         Fragment.objects.filter(id=fragment.id).update(
             embedding=[0.2] * 768,
             is_confirmed=True,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return [0.1] * 768
 

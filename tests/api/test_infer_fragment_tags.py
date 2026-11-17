@@ -3,9 +3,9 @@
 from types import SimpleNamespace
 
 import pytest
-from django.utils import timezone
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -109,7 +109,7 @@ def test_rejects_a_concurrent_text_edit_without_overwriting_it(
             fragment_type='skip',
             start_line=4,
             end_line=5,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return {'scene_type': '动作'}
 
@@ -140,7 +140,7 @@ def test_rejects_a_concurrent_tag_edit_without_overwriting_it(
     def fake_infer(*_args, **_kwargs):
         Fragment.objects.filter(id=fragment.id).update(
             tags=concurrent_tags,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return {'scene_type': '动作'}
 
@@ -171,7 +171,7 @@ def test_rejects_a_concurrent_confirmation_without_clearing_it(
         Fragment.objects.filter(id=fragment.id).update(
             is_confirmed=True,
             embedding=confirmed_embedding,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return {'scene_type': '动作'}
 
@@ -227,7 +227,7 @@ def test_rejects_a_later_inference_without_overwriting_the_first_result(
             tags=first_result,
             is_confirmed=False,
             embedding=None,
-            updated_at=timezone.now(),
+            updated_at=concurrent_updated_at(fragment.updated_at),
         )
         return {'scene_type': '动作'}
 

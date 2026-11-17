@@ -3,6 +3,7 @@
 import pytest
 
 from examples.models import Article, Fragment
+from tests.concurrency import concurrent_updated_at
 from tests.factories import BaseCardFactory
 
 
@@ -87,8 +88,10 @@ def test_rejects_a_stale_pair_without_resolving_any_other_pair(
     new_two = _fragment(article, '共同二\n新二', confirmed=False, order=4)
     payload = {'conflicts': [_pair(old_one, new_one), _pair(old_two, new_two)]}
     stale_fragment = old_two if stale_target == 'old' else new_two
-    stale_fragment.text = '并发修改后的片段'
-    stale_fragment.save(update_fields=['text', 'updated_at'])
+    Fragment.objects.filter(id=stale_fragment.id).update(
+        text='并发修改后的片段',
+        updated_at=concurrent_updated_at(stale_fragment.updated_at),
+    )
     api_client.force_authenticate(user=user)
 
     response = api_client.post(ENDPOINT, data=payload, format='json')
