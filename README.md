@@ -9,6 +9,7 @@ Django REST API for [Fanfic Assistant](https://github.com/YennieP/Fanfic-Assista
 - [后端文档职责](./docs/README.md)
 - [Phase 1 实验报告](./EXPERIMENT.md)
 - [仓库开发约束](./AGENTS.md)
+- [隔离大纲实验 runner：合成 dry-run](./docs/outline-experiments.md)
 - [跨系统设计、实现状态、待办与审计](https://github.com/YennieP/Fanfic-Assistant/tree/main/docs)
 
 跨系统状态只在前端仓库的 `docs/IMPLEMENTATION.md` 维护，本 README 不再复制一份“已完成能力”清单。

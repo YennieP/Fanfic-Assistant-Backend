@@ -1,12 +1,13 @@
 # 后端文档职责
 
-本仓库只维护后端开发入口和实验原始记录，避免与前端仓库中的跨系统文档重复。
+本仓库维护后端开发入口、隔离实验工具操作说明和实验原始记录，避免与前端仓库中的跨系统文档重复。
 
 | 文档 | 职责 |
 |---|---|
 | [../README.md](../README.md) | 后端技术栈、运行与验证命令、部署边界、API 总览 |
 | [../EXPERIMENT.md](../EXPERIMENT.md) | Phase 1 实验设计、原始结果和方法论备注 |
 | [../AGENTS.md](../AGENTS.md) | 后端开发、文档同步和验证规则 |
+| [outline-experiments.md](./outline-experiments.md) | 隔离实验 CLI、合成夹具、产物留存与失败边界；不重复跨系统设计或状态表 |
 
 跨前后端文档的唯一来源位于 [`YennieP/Fanfic-Assistant/docs`](https://github.com/YennieP/Fanfic-Assistant/tree/main/docs)：
 

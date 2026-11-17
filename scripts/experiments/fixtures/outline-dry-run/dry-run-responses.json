@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "responses": {
+    "D0": {
+      "text": "# Survey outline\nCompare the two incomplete maps, agree on the current survey boundary, and leave the unresolved route for the later map.\n",
+      "status": "ok",
+      "finish_reason": "STOP",
+      "usage": {"prompt_tokens": 100, "output_tokens": 40, "total_tokens": 140}
+    },
+    "A1": {
+      "text": "【CONTEXT_MAP】\nThe maps are incomplete. The missing map arrives later.\n【FINAL_OUTLINE】\n# Survey outline\nShare current map observations, choose a provisional survey boundary, and record the route that still needs the later map.\n",
+      "status": "ok",
+      "finish_reason": "STOP",
+      "usage": {"prompt_tokens": 130, "output_tokens": 70, "total_tokens": 200}
+    }
+  }
+}
