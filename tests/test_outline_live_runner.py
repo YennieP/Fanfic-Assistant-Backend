@@ -814,3 +814,28 @@ def test_used_authorization_refuses_before_reading_content_again(pack, storage):
         again["exit_code"] == 2 and again["error_code"] == "authorization_already_used"
     )
     assert again["http_requests_attempted"] == 0 and len(net.requests) == 1
+
+
+def test_closed_tty_credential_input_is_recorded_before_any_http(
+    pack, storage, monkeypatch
+):
+    from scripts.experiments import execution_plan
+
+    plan, p = approved_plan(pack, storage)
+    monkeypatch.setattr(execution_plan.sys.stdin, "isatty", lambda: True)
+
+    def closed(*args):
+        raise EOFError()
+
+    monkeypatch.setattr(execution_plan.getpass, "getpass", closed)
+
+    def no_client(**kwargs):
+        raise AssertionError("client created after closed credential input")
+
+    result = module().run_live_pair(
+        pack, plan, storage / "runs", client_factory=no_client
+    )
+    assert (
+        result["exit_code"] == 2 and result["error_code"] == "credential_input_closed"
+    )
+    assert result["http_requests_attempted"] == 0

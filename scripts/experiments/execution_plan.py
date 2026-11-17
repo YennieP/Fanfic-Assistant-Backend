@@ -304,7 +304,10 @@ def read_credential(source):
     else:
         if not sys.stdin.isatty():
             raise base.GuardError("credential_prompt_requires_tty")
-        key = getpass.getpass("Experiment Gemini API key: ")
+        try:
+            key = getpass.getpass("Experiment Gemini API key: ")
+        except EOFError:
+            raise base.GuardError("credential_input_closed") from None
     if not isinstance(key, str) or not re.fullmatch(r"AIza[A-Za-z0-9_-]{35}", key):
         raise base.GuardError("experiment_credential_unavailable")
     return key
