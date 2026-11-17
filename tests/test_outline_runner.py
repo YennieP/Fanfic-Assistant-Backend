@@ -313,3 +313,88 @@ def test_condition_labels_determine_prompt_even_if_sections_are_reordered(task, 
     mapped = runner.compile_prompt(loaded, 'A1')
     assert 'Directly propose' in direct['user'] and 'CONTEXT_MAP' not in direct['user']
     assert 'CONTEXT_MAP' in mapped['user'] and 'Directly propose' not in mapped['user']
+
+
+def approve_conditions(task, text):
+    file = task / 'generation-conditions.md'
+    file.write_bytes(text.encode())
+    sha = runner.digest(file.read_bytes())
+    def update(manifest):
+        manifest['files']['generation-conditions.md']['sha256'] = sha
+        manifest['protocol_approval']['file_sha256']['generation-conditions.md'] = sha
+    change_json(task / 'manifest.json', update)
+
+
+@pytest.mark.parametrize('example', [
+    '```text\nShared instruction.\n## A1\n```\n',
+    '```text\nShared instruction.\n```\n\n```python\n## A1\n```\n',
+    '```text\nShared instruction.\n```\n\n````text\n## A1\n````\n',
+    '```text\nShared instruction.\n```\n\n~~~text\n## A1\n~~~\n',
+])
+def test_fenced_headings_cannot_supply_missing_condition_roles(task, output, capsys, example):
+    approve_conditions(task, '## Shared system instruction\n\n' + example +
+                       '\n```text\nDIRECT_TAIL\n## D0\n```\n'
+                       '\n```text\nMAP_TAIL\n```\n')
+    code = runner.main(['--dry-run', '--task-dir', str(task), '--output-root', str(output)])
+    saved = receipt(json.loads(capsys.readouterr().out))
+    assert code == 2
+    assert saved['error_code'] == 'invalid_condition_templates'
+    assert saved['simulated_requests'] == 0 and saved['results'] == []
+    assert not saved.get('comparable_pair', False)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_structural_roles_preserve_fenced_heading_content(task, output, newline):
+    text = ('## Shared system instruction\n\n```text\nShared.\n## A1\n```\n'
+            '\n```python\n## D0\n```\n'
+            '\n## A1\n\n```text\nMAP_TAIL\n## D0\n```\n'
+            '\n## D0\n\n```text\nDIRECT_TAIL\n## A1\n```\n')
+    approve_conditions(task, text.replace('\n', newline))
+    result, saved = execute(task, output)
+    assert result['exit_code'] == 0 and saved['comparable_pair']
+    directory = Path(result['receipt']).parents[1]
+    prompts = {g: json.loads((directory / 'internal/prompts' / (g + '.json')).read_text())
+               for g in runner.GROUPS}
+    assert prompts['D0']['system'] == 'Shared.' + newline + '## A1' + newline
+    common = (task / 'common-input.md').read_bytes().decode()
+    assert prompts['D0']['user'] == common + '\n\nDIRECT_TAIL' + newline + '## A1' + newline
+    assert prompts['A1']['user'] == common + '\n\nMAP_TAIL' + newline + '## D0' + newline
+
+
+@pytest.mark.parametrize('group', runner.GROUPS)
+@pytest.mark.parametrize('empty,budget', [(False, 4096), (True, 4096), (False, 1)])
+def test_error_finish_reason_is_retained_as_failure(task, output, capsys, group, empty, budget):
+    def update(spec):
+        spec['responses'][group]['finish_reason'] = 'ERROR'
+        if empty:
+            spec['responses'][group]['text'] = ''
+    change_json(task / 'dry-run-responses.json', update)
+    raw = json.loads((task / 'dry-run-responses.json').read_text())['responses'][group]['text']
+    code = runner.main(['--dry-run', '--task-dir', str(task), '--output-root', str(output),
+                        '--max-output-tokens', str(budget)])
+    result = json.loads(capsys.readouterr().out)
+    saved = receipt(result)
+    row = next(r for r in saved['results'] if r['condition'] == group)
+    assert code == 1 and saved['status'] == 'completed_with_failures'
+    assert row['status'] == 'finish_error' and row['finish_reason'] == 'ERROR'
+    assert row['error_code'] == 'error_finish_reason'
+    assert row['blinding'] == ('degraded' if group == 'A1' else 'intact')
+    assert not saved['comparable_pair']
+    assert saved['simulated_requests'] == 2 and len(saved['results']) == 2
+    assert saved['real_model_calls'] == saved['model_judging_calls'] == 0
+    directory = Path(result['receipt']).parents[1]
+    assert (directory / 'internal/raw' / (group + '.txt')).read_bytes() == raw.encode()
+    assert (directory / 'review' / (row['output_id'] + '.md')).read_bytes() == raw.encode()
+    if budget == 4096:
+        assert next(r for r in saved['results'] if r['condition'] != group)['status'] == 'ok'
+
+
+@pytest.mark.parametrize('status', ['refused', 'timeout', 'transport_error', 'rate_limit'])
+def test_a1_error_finish_keeps_explicit_provider_failure_status(task, output, status):
+    change_json(task / 'dry-run-responses.json', lambda s: s['responses']['A1'].update(
+        status=status, finish_reason='ERROR'))
+    result, saved = execute(task, output)
+    assert result['exit_code'] == 1 and not saved['comparable_pair']
+    assert next(r for r in saved['results'] if r['condition'] == 'A1')['status'] == status
+    assert next(r for r in saved['results'] if r['condition'] == 'D0')['status'] == 'ok'
+    assert saved['simulated_requests'] == 2

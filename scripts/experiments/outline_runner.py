@@ -98,6 +98,47 @@ def write_json(path: Path, value: Any) -> None:
     write_new(path, (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode())
 
 
+def parse_condition_templates(text: str) -> dict[str, str]:
+    templates: dict[str, str] = {}
+    title = ''
+    fence: str | None = None
+    role: str | None = None
+    body: list[str] = []
+    for line in text.splitlines(keepends=True):
+        marker = re.fullmatch(r' {0,3}(`{3,}|~{3,})([^\r\n]*)\r?\n?', line)
+        if fence is not None:
+            if (marker and marker.group(1)[0] == fence[0]
+                    and len(marker.group(1)) >= len(fence) and not marker.group(2).strip()):
+                if role is not None:
+                    content = ''.join(body)
+                    if role in templates or not content.strip():
+                        raise GuardError('invalid_condition_templates')
+                    templates[role] = content
+                fence, role, body = None, None, []
+            elif role is not None:
+                body.append(line)
+            continue
+        if marker:
+            fence = marker.group(1)
+            # Ignore other fenced examples entirely, including their headings.
+            if fence == '```' and marker.group(2).strip() == 'text':
+                if re.match(r'D0\b', title):
+                    role = 'D0'
+                elif re.match(r'A1\b', title):
+                    role = 'A1'
+                elif 'system instruction' in title.casefold():
+                    role = 'shared'
+                else:
+                    raise GuardError('invalid_condition_templates')
+            continue
+        heading = re.match(r'^##[ \t]+([^\r\n]+)', line)
+        if heading:
+            title = heading.group(1)
+    if fence is not None or set(templates) != {'shared', 'D0', 'A1'}:
+        raise GuardError('invalid_condition_templates')
+    return templates
+
+
 def load_task(task_dir: Path) -> dict[str, Any]:
     directory = task_dir.absolute()
     manifest_bytes = read_regular(directory / 'manifest.json')
@@ -166,33 +207,7 @@ def load_task(task_dir: Path) -> dict[str, Any]:
             raise GuardError('input_not_utf8') from None
         frozen[name] = raw
         hashes[name] = expected
-    condition_text = frozen['generation-conditions.md'].decode()
-    blocks = list(re.finditer(
-        r'^```text[ \t]*\r?\n(.*?)^```[ \t]*\r?$',
-        condition_text, re.MULTILINE | re.DOTALL,
-    ))
-    if len(blocks) != 3:
-        raise GuardError('invalid_condition_templates')
-    headings = list(re.finditer(r'^##[ \t]+([^\r\n]+)', condition_text, re.MULTILINE))
-    templates = {}
-    for block in blocks:
-        preceding = [h for h in headings if h.start() < block.start()]
-        if not preceding or not block.group(1).strip():
-            raise GuardError('invalid_condition_templates')
-        title = preceding[-1].group(1)
-        if re.match(r'D0\b', title):
-            role = 'D0'
-        elif re.match(r'A1\b', title):
-            role = 'A1'
-        elif 'system instruction' in title.casefold():
-            role = 'shared'
-        else:
-            raise GuardError('invalid_condition_templates')
-        if role in templates:
-            raise GuardError('invalid_condition_templates')
-        templates[role] = block.group(1)
-    if set(templates) != {'shared', 'D0', 'A1'}:
-        raise GuardError('invalid_condition_templates')
+    templates = parse_condition_templates(frozen['generation-conditions.md'].decode())
     return {
         'id': task_id, 'directory': directory, 'manifest_hash': digest(manifest_bytes),
         'files': frozen, 'hashes': hashes, 'system': templates['shared'],
@@ -339,7 +354,10 @@ def run_pair(
                 'latency_source': 'local_fake_call', 'output_sha256': digest(raw),
                 'output_bytes': len(raw), 'blinding': 'intact',
             }
-            if response['status'] == 'ok' and (
+            if response['status'] == 'ok' and response['finish_reason'] == 'ERROR':
+                result.update(status='finish_error', error_code='error_finish_reason',
+                              blinding='degraded' if group == 'A1' else 'intact')
+            elif response['status'] == 'ok' and (
                 response['finish_reason'] == 'MAX_TOKENS'
                 or response['usage']['output_tokens'] > max_output_tokens
             ):

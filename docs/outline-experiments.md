@@ -22,7 +22,7 @@ CLI 强制 `--dry-run`，没有 live/provider/Key 选项。任务包必须标注
 
 任务目录包含 `manifest.json` 与以下五份校验文件：共同输入、评价参考、pilot 协议、生成条件、作者评价表。路径和文件名固定为合成夹具中的命名；manifest 中的其他路径或源材料引用不会被自动读取。
 
-`generation-conditions.md` 按认可的布局提供三个 `text` fence：共同 system instruction、D0 追加文本、A1 追加文本。runner 按所属二级标题识别角色（shared 标题含 `system instruction`），不按出现顺序猜组别；多余、缺失、重复或空模板拒绝执行。完整保留共同输入，再拼接对应追加文本；评价参考和作者评价表只校验/留存，不进入生成 prompt。
+`generation-conditions.md` 按认可的布局提供三个三反引号 `text` fence：共同 system instruction、D0 追加文本、A1 追加文本。runner 只按代码块外的所属二级标题识别角色（shared 标题含 `system instruction`），不按出现顺序猜组别；模板正文中的标题原样保留，其他语言、较长反引号或波浪号代码块中的示例不提供模板或角色。多余、缺失、重复、空模板或未闭合代码块拒绝执行。完整保留共同输入，再拼接对应追加文本；评价参考和作者评价表只校验/留存，不进入生成 prompt。
 
 假 provider 从任务目录的 `dry-run-responses.json` 读取预写结果。替代文件只允许简单 JSON 文件名，不允许路径跳转。该文件的 hash 与快照同样保留。预写文本和 token 是合成数据，不是模型生成或实际模型用量。
 
@@ -49,6 +49,8 @@ A1 标记必须为独立行 `【CONTEXT_MAP】`、`【FINAL_OUTLINE】`，允许
 每组只执行一次假请求，无自动重试或 fallback。`--max-requests` 必须为 2；不足或扩大预算都在请求前拒绝。`--max-output-tokens` 默认 4096，仅对合成 usage 校验，同样覆盖 A1 的 map 与最终方案合计；这不是已批准的真实模型预算。
 
 拒答、timeout、transport/rate-limit 模拟、空响应、截断和解析失败分别保留。某条件失败不删除它，也不阻止预算内的另一条件被记录。输入或假响应在运行中改变时，不恢复源文件；使用已校验快照完成两组并记录 `source_unchanged=false`，该对不能标为可比较成功。
+
+响应即使标注 `status=ok`，若 `finish_reason=ERROR`，仍记为 `finish_error` / `error_code=error_finish_reason`，优先于空响应、超预算或区块解析分类。原始文本和 ERROR 原因保留，两条件仍各记录一次，整对返回退出码 1、`completed_with_failures` 和 `comparable_pair=false`。A1 此时展示未拆分原文，标记 `blinding=degraded`；明确的拒答或传输失败状态继续保留自己的分类。
 
 退出码：0 表示合成流程完整成功；1 表示已记录一对但有失败、截断、解析或输入变更；2 表示前置拒绝或 I/O 错误。所有结果显式标记 `real_model_calls=0`、`model_judging_calls=0`，`simulated_requests` 不能写成真实模型调用次数。
 
