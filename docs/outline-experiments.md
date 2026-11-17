@@ -1,6 +1,6 @@
-# 隔离大纲实验 runner：合成 dry-run
+# 隔离大纲实验：合成 runner 与 Gemini transport
 
-本批工具只验证实验流程，不调用模型、不读取 production Key、不连接数据库，也不生成可用于文学质量评价的结果。跨系统设计与开放任务以私有前端仓库中的 evaluation、IMPLEMENTATION 和 ToDo 为准。
+合成 runner 只验证实验流程，不调用模型、不读取 production Key、不连接数据库，也不生成文学质量评价结果。独立 Gemini transport 只有在完整、明确的执行许可下才调用真实模型；开发与自动验收仍使用合成数据和假网络。跨系统设计、默认分支状态与开放任务以前端仓库中的 evaluation、IMPLEMENTATION 和 ToDo 为准。
 
 ## 运行
 
@@ -58,4 +58,46 @@ A1 默认采用保守的 `blinding=degraded`，只有响应成功且 map/final �
 
 ## 后续边界
 
-真实 provider、SDK 请求计数/重试、模型参数、费用、凭据渠道和私人材料外传需要后续独立实现与授权。当前 runner 没有这些功能，dry-run 不证明 API 可用、token 计量准确、完整盲评或补纲有效。
+合成 runner 不提供真实 provider、凭据或私人材料外传能力；下述独立 Gemini transport 的实际参数、计费和私人执行仍须分别确认授权。dry-run 不证明 API 可用、token 计量准确、完整盲评或补纲有效。
+
+## 独立 Gemini transport
+
+`outline_live_runner.py` 为独立的 Gemini Developer API 执行入口，首个 adapter 仅支持 `gemini-2.5-flash`；不会初始化 Django、读取平台数据库/production Key 或使用生产 adapter 的默认重试。以下命令只创建未批准的计划，不读取共同输入正文、不取 Key、不联网：
+
+```bash
+./scripts/python-project.sh scripts/experiments/outline_live_runner.py --prepare-plan --task-dir scripts/experiments/fixtures/outline-dry-run --execution-plan .runtime/outline-plan.json
+```
+
+计划中的参数是草案建议：temperature `0.7`、top-p `0.95`、输出预算 `4096`、thinking budget `0`、provider seed `null`。order seed `17` 只影响执行/展示顺序；执行与展示依次推进同一个 RNG，固定 seed 可重放顺序，展示位置不固定对应 D0/A1。provider seed 可单独指定，均不保证输出或后端权重确定性。价格值 `0` 没有通过审核，不能据此视为免费或执行授权。生成计划不会批准执行；示例也不代表已完成真实 API 可用性验收。
+
+### 执行许可与冻结
+
+实际执行前，必须由操作者根据产品所有者的明确授权确认完整计划：输入/协议五文件 hash、冻结 manifest hash、来源类型、精确请求模型与预期 `modelVersion`、采样/输出参数、价格上界、预算、凭据来源及到期时间，并明确设置 `execution_authorized`、`external_transmission_authorized` 和 `pricing.reviewed` 为 true。到期时间必须带时区且在未来 24 小时内；执行计划只能位于本 checkout 的 `.runtime`，绑定其路径摘要、四个运行模块的内容摘要和 Python/httpx 版本。
+
+TASK-002 的冻结输入、评价、协议及原 manifest 不回写。原 manifest 的 false 权限/零调用计数属于预实验快照；本次许可来自另一个绑定该快照的执行计划，实际尝试以 execution claim、request journal 和 receipt 为准，不能用旧 manifest 的 0 推断尚未调用。private 来源仅允许 `author_private_outline_minimal_extract`，且完整输入 hash 和 manifest 绑定都满足后才读取共同输入正文。未批准、来源/版本/参数/运行环境不符时，不读取私人正文/凭据、不构造网络客户端。
+
+每个自动生成的 32 位 hex authorization ID 在固定 runtime 中仅启动一次执行，在计划元数据校验完成后、正文/凭据读取前，通过独占创建 claim 固定到 run；已使用的许可不再次读取正文。输入验证、缺 Key、网络失败、中断或崩溃均不自动释放。每次 HTTP 尝试前重新核对计划、代码/运行环境摘要和到期时间，已在途请求不能撤回；观察到变更后不发下一次请求。复制到其他 checkout 的计划不能复用，新的 ID/计划须有新的相应执行授权。此机制是受控本地操作声明与记录，不是对同权限操作者的 OS sandbox 或远端签名认证。
+
+凭据渠道只有交互式 TTY 的 getpass（默认）或显式选定的 `FANFIC_EXPERIMENT_GEMINI_API_KEY`。仅接收 Gemini Developer API 的 `AIza` API Key 格式，Key 不进入计划、prompt、日志或回执；不自动读取 `.env`、其他 provider 变量、平台 Key 或密码管理器。如果输入/许可材料中出现本次 Key，拒绝快照和传输。实际使用哪个 Key、账户计费和第三方数据使用条件仍须执行前确认。
+
+### 请求和费用预算
+
+同一对最多 4 次客户端 HTTP 尝试：两个完整 `generateContentRequest` 的 `countTokens` 查询、D0/A1 各一次 `generateContent`。计划必须显式批准 `max_http_requests=4`、`max_generation_requests=2`、`max_retries=0`；全部四次都记入 journal，无 SDK/项目重试、fallback 或 redirect。请求固定到 Google 的 Gemini API host；不继承代理环境或跨请求 cookies，不支持任意 endpoint、工具调用、对话历史或 continuation。
+
+先按已批准的单次 count-query 费用上界检查查询预算，再取得两组 token 数；在任何生成请求之前，以完整输入 token、每组最大输出 token（含内部过程）和已审核输入/输出价格计算整对保守预留。预留超过 `max_cost_usd` 时，已有查询仍记录，生成次数为 0。该费用约束依赖 Google 报告的计数、请求输出上限及操作者确认的价格上界；它不是 provider invoice、账户级硬账单限制或免费额度保证。不能确认这些前提时不能声称费用有硬保证，应在执行前结合账户侧配额/计费控制决策。
+
+响应记录 `modelVersion`、候选/思考/未分类 token、完整 usage、真实请求耗时和估算依据。与预期版本不符、usage 缺失或超过计数/输出界限、工具/非文本结果会使该输出不可比较并停止剩余生成；只记录 provider 返回的版本字符串，不证明后端权重不可变。未知费用不填 0，`estimated_cost_usd=null` / `cost_estimate_complete=false` 与可核对的部分估算分开。HTTP 失败、timeout 或许可变化也停止剩余请求；已开始但未取得可用响应的生成标为 `request_failed` / attempt 1，尚未开始的条件标为 `not_attempted` / attempt 0。
+
+### 输出与实际执行
+
+计划确认、Key 就绪后才保存私人输入快照和构造客户端。每次尝试在 dispatch 前独占保存 `internal/requests/N-started.json`，之后保存响应状态、字节数、原始摘要及可安全保留的原始 UTF-8 body/JSON；明确的 HTTP 错误或无效 JSON 可能回显 Key，仅留状态/大小/hash。同一 JSON 对象中的重复字段（包括嵌套对象和转义后同名的字段）视为歧义响应，在响应正文或解析对象落盘前以 `provider_response_invalid` 拒绝，仅留状态/大小/hash，并停止剩余请求；不同对象可以各自使用相同字段名。解析后的所有字符串（含字段名、嵌套值和数组项）在同一遍历中验证 UTF-8 可编码性；孤立 surrogate 即使以合法 ASCII 转义传来，也在响应落盘前按 `provider_response_invalid` 拒绝，保留真实尝试、未知费用与终态回执。合法 emoji、有效 surrogate pair 和普通中文原样保留。有效 JSON 回显本次 Key 时保存脱敏 trace 并使该次失败，不保存原秘密。网络响应最多 1 MiB，拒绝压缩响应，记录 HTTPX 各 I/O 阶段 timeout 和流读取中的耗时截止检查；这不承诺全链路硬墙钟 deadline。
+
+生成成功/拒答/截断/解析失败的原文与 review/index/receipt 共用合成 runner 的区块拆分和盲化分类：A1 未可靠拆分均保守标 degraded；成功拆分才只展示 final、标 intact。源文件后来变化会使整对不可比较，不改写源文件或快照。request journal 的“attempted”不证明 provider 已接受或收费；若末尾产物写入失败，CLI 以请求数 unknown 返回，须检查原 claim/journal，不能按 0 重跑。
+
+下列命令会联网、可能产生费用并传输已批准输入，只能在代码审核和完整执行授权之后运行：
+
+```bash
+./scripts/python-project.sh scripts/experiments/outline_live_runner.py --execute --task-dir /absolute/path/to/frozen/task --execution-plan .runtime/outline-plan.json
+```
+
+退出码 0 表示完整可比较结果；1 表示已有 HTTP 尝试但失败、不完整或完整性变化；2 表示前置拒绝/无 HTTP 的失败，或产物无法确认的 I/O 错误（此时请求数可为 unknown）。本批自动测试仅使用合成内容、格式正确的 dummy Key、HTTPX MockTransport 与本地 HTTP server，不发送真实 Gemini 推断请求。
