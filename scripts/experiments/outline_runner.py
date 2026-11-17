@@ -352,11 +352,10 @@ def run_pair(
                 'finish_reason': response['finish_reason'], 'usage': response['usage'],
                 'usage_source': 'synthetic_fixture', 'elapsed_ms': elapsed_ms,
                 'latency_source': 'local_fake_call', 'output_sha256': digest(raw),
-                'output_bytes': len(raw), 'blinding': 'intact',
+                'output_bytes': len(raw), 'blinding': 'degraded' if group == 'A1' else 'intact',
             }
             if response['status'] == 'ok' and response['finish_reason'] == 'ERROR':
-                result.update(status='finish_error', error_code='error_finish_reason',
-                              blinding='degraded' if group == 'A1' else 'intact')
+                result.update(status='finish_error', error_code='error_finish_reason')
             elif response['status'] == 'ok' and (
                 response['finish_reason'] == 'MAX_TOKENS'
                 or response['usage']['output_tokens'] > max_output_tokens
@@ -369,6 +368,7 @@ def run_pair(
                 try:
                     context, final = split_context_map(final)
                     write_new(run_dir / 'internal' / 'context-map.txt', context.encode())
+                    result['blinding'] = 'intact'
                 except GuardError as error:
                     result.update(status='parse_error', error_code=str(error), blinding='degraded')
                     final = response['text']

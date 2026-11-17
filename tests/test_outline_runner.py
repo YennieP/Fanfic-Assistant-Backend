@@ -59,6 +59,7 @@ def test_full_cli_is_offline_and_separates_review_from_internal(task, output, mo
     assert saved['source_unchanged'] and saved['comparable_pair']
     assert {r['condition'] for r in saved['results']} == {'D0', 'A1'}
     assert all(r['attempt'] == 1 and r['usage_source'] == 'synthetic_fixture' for r in saved['results'])
+    assert all(r['blinding'] == 'intact' for r in saved['results'])
     directory = Path(result['receipt']).parents[1]
     for group in runner.GROUPS:
         prompt = json.loads((directory / 'internal/prompts' / (group + '.json')).read_text())
@@ -69,6 +70,7 @@ def test_full_cli_is_offline_and_separates_review_from_internal(task, output, mo
         assert 'synthetic-secret-that-must-not-be-read' not in str(prompt)
     index = json.loads((directory / 'review/index.json').read_text())
     assert 'order_seed' not in index and 'execution_order' not in index
+    assert all(r['blinding'] == 'intact' for r in index['outputs'])
     assert len({r['output_id'] for r in saved['results']}) == 2
     fake = json.loads((task / 'dry-run-responses.json').read_text())['responses']
     for row in saved['results']:
@@ -398,3 +400,42 @@ def test_a1_error_finish_keeps_explicit_provider_failure_status(task, output, st
     assert next(r for r in saved['results'] if r['condition'] == 'A1')['status'] == status
     assert next(r for r in saved['results'] if r['condition'] == 'D0')['status'] == 'ok'
     assert saved['simulated_requests'] == 2
+
+
+@pytest.mark.parametrize('failure,expected_status', [
+    ('max_tokens', 'truncated'), ('over_budget', 'truncated'),
+    ('refused', 'refused'), ('timeout', 'timeout'),
+    ('transport_error', 'transport_error'), ('rate_limit', 'rate_limit'),
+    ('empty', 'empty_response'),
+])
+def test_a1_failed_review_discloses_degraded_blinding(task, output, capsys, failure, expected_status):
+    def update(spec):
+        response = spec['responses']['A1']
+        if failure == 'max_tokens':
+            response['finish_reason'] = 'MAX_TOKENS'
+        elif failure == 'empty':
+            response['text'] = ''
+        elif failure != 'over_budget':
+            response.update(status=failure, finish_reason='ERROR')
+    change_json(task / 'dry-run-responses.json', update)
+    responses = json.loads((task / 'dry-run-responses.json').read_text())['responses']
+    code = runner.main(['--dry-run', '--task-dir', str(task), '--output-root', str(output),
+                        '--max-output-tokens', '50' if failure == 'over_budget' else '4096'])
+    result = json.loads(capsys.readouterr().out)
+    saved = receipt(result)
+    row = next(r for r in saved['results'] if r['condition'] == 'A1')
+    directory = Path(result['receipt']).parents[1]
+    index = json.loads((directory / 'review/index.json').read_text())
+    visible = next(r for r in index['outputs'] if r['output_id'] == row['output_id'])
+    assert code == 1 and saved['status'] == 'completed_with_failures'
+    assert not saved['comparable_pair']
+    assert row['status'] == visible['status'] == expected_status
+    assert row['finish_reason'] == responses['A1']['finish_reason']
+    assert row['blinding'] == visible['blinding'] == 'degraded'
+    assert (directory / 'internal/raw/A1.txt').read_bytes() == responses['A1']['text'].encode()
+    assert (directory / 'review' / (row['output_id'] + '.md')).read_bytes() == responses['A1']['text'].encode()
+    assert not (directory / 'internal/context-map.txt').exists()
+    assert next(r for r in saved['results'] if r['condition'] == 'D0')['status'] == 'ok'
+    assert next(r for r in saved['results'] if r['condition'] == 'D0')['blinding'] == 'intact'
+    assert saved['simulated_requests'] == 2
+    assert saved['real_model_calls'] == saved['model_judging_calls'] == 0

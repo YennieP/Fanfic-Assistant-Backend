@@ -35,7 +35,7 @@ CLI 强制 `--dry-run`，没有 live/provider/Key 选项。任务包必须标注
 - `internal/raw/`：每个条件的完整原始输出。
 - `internal/context-map.txt`：A1 成功拆分的过程区块。
 - `internal/receipt.json`：runner hash、Python 版本、UTC 时点、输入/响应 hash、运行顺序、匿名映射、每次假请求状态/合成用量、本地假调用延迟与产物 hash。
-- `review/index.json` 和中性 ID 的 Markdown：打乱后的作者审阅版，只显示最终方案；不显示组别、顺序 seed、map 或用量。
+- `review/index.json` 和中性 ID 的 Markdown：打乱后的作者审阅版，索引不显示组别、顺序 seed 或用量；成功拆分的 A1 只展示最终方案，未拆分的 A1 失败响应保留原文并明确标记 `blinding=degraded`，原文可能包含 map。
 - `review/author-review-form.md`：作者评价表。
 
 新 run 目录使用 0700，新文件使用 0600（依操作系统权限语义）；只存入 `.runtime`，不提交 Git。该路径约束是本地工具边界，不是对同权限用户的操作系统 sandbox。
@@ -51,6 +51,8 @@ A1 标记必须为独立行 `【CONTEXT_MAP】`、`【FINAL_OUTLINE】`，允许
 拒答、timeout、transport/rate-limit 模拟、空响应、截断和解析失败分别保留。某条件失败不删除它，也不阻止预算内的另一条件被记录。输入或假响应在运行中改变时，不恢复源文件；使用已校验快照完成两组并记录 `source_unchanged=false`，该对不能标为可比较成功。
 
 响应即使标注 `status=ok`，若 `finish_reason=ERROR`，仍记为 `finish_error` / `error_code=error_finish_reason`，优先于空响应、超预算或区块解析分类。原始文本和 ERROR 原因保留，两条件仍各记录一次，整对返回退出码 1、`completed_with_failures` 和 `comparable_pair=false`。A1 此时展示未拆分原文，标记 `blinding=degraded`；明确的拒答或传输失败状态继续保留自己的分类。
+
+A1 默认采用保守的 `blinding=degraded`，只有响应成功且 map/final 可靠拆分后才标为 `intact`。截断、超预算、拒答、timeout、transport/rate-limit、空响应、ERROR 和解析失败均保留原文及自己的失败分类，receipt 与审阅索引同步标记降级。该标记描述单份输出的过程隔离，与整对可比较性独立：源文件后来改变时，整对仍不可比较，已经成功拆分的审阅输出可以继续标为 `intact`。
 
 退出码：0 表示合成流程完整成功；1 表示已记录一对但有失败、截断、解析或输入变更；2 表示前置拒绝或 I/O 错误。所有结果显式标记 `real_model_calls=0`、`model_judging_calls=0`，`simulated_requests` 不能写成真实模型调用次数。
 
