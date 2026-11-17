@@ -839,3 +839,119 @@ def test_closed_tty_credential_input_is_recorded_before_any_http(
         result["exit_code"] == 2 and result["error_code"] == "credential_input_closed"
     )
     assert result["http_requests_attempted"] == 0
+
+
+def review_conditions(result, receipt):
+    index = json.loads((Path(result["review_directory"]) / "index.json").read_text())
+    mapping = {row["output_id"]: row["condition"] for row in receipt["results"]}
+    return tuple(mapping[row["output_id"]] for row in index["outputs"])
+
+
+def test_review_order_does_not_fix_group_positions_across_seeds(pack, storage):
+    observed = set()
+    for seed in range(16):
+        plan, data = approved_plan(pack, storage)
+        data["order_seed"] = seed
+        plan.write_text(json.dumps(data))
+        net = Network()
+        result, receipt = execute(pack, storage, plan, net)
+        assert result["exit_code"] == 0 and len(net.requests) == 4
+        assert all(row["blinding"] == "intact" for row in receipt["results"])
+        observed.add(review_conditions(result, receipt))
+    assert observed == {("D0", "A1"), ("A1", "D0")}
+
+
+def test_same_order_seed_replays_execution_and_review_mapping(pack, storage):
+    observed = []
+    for _ in range(2):
+        plan, data = approved_plan(pack, storage)
+        data["order_seed"] = 4
+        plan.write_text(json.dumps(data))
+        result, receipt = execute(pack, storage, plan, Network())
+        assert result["exit_code"] == 0
+        observed.append(
+            (receipt["execution_order"], review_conditions(result, receipt))
+        )
+    assert observed[0] == observed[1]
+
+
+@pytest.mark.parametrize(
+    "endpoint,encoding,nested",
+    [
+        (endpoint, encoding, nested)
+        for endpoint in ("countTokens", "generateContent")
+        for encoding in ("literal", "escaped")
+        for nested in (False, True)
+    ],
+    ids=[
+        f"{endpoint}-{encoding}-{'nested' if nested else 'top'}"
+        for endpoint in ("countTokens", "generateContent")
+        for encoding in ("literal", "escaped")
+        for nested in (False, True)
+    ],
+)
+def test_duplicate_json_members_never_save_key(
+    pack, storage, endpoint, encoding, nested
+):
+    plan, _ = approved_plan(pack, storage)
+    raw_key = (
+        KEY if encoding == "literal" else "".join(f"\\u{ord(char):04x}" for char in KEY)
+    )
+    name = "echo" if encoding == "literal" else "ec\\u0068o"
+    echo = f'{{"echo":"{raw_key}","{name}":"safe"}}'.encode()
+    captured = []
+
+    def duplicate(req, response, net):
+        if req.url.path.endswith(":" + endpoint):
+            prefix = b'{"extra":' + echo + b"," if nested else echo[:-1] + b","
+            raw = prefix + response.content[1:]
+            captured.append(raw)
+            return httpx.Response(200, content=raw)
+        return response
+
+    net = Network(duplicate)
+    result, receipt = execute(pack, storage, plan, net)
+    run = Path(result["receipt"]).parents[1]
+    for path in run.rglob("*"):
+        if path.is_file():
+            assert KEY.encode() not in path.read_bytes()
+            assert raw_key.encode() not in path.read_bytes()
+    assert result["exit_code"] == 1 and not receipt["comparable_pair"]
+    assert receipt["error_code"] == "provider_response_invalid"
+    expected_attempts = 1 if endpoint == "countTokens" else 3
+    assert len(net.requests) == receipt["http_requests_attempted"] == expected_attempts
+    meta = json.loads(
+        (run / f"internal/requests/{expected_attempts}-response.json").read_text()
+    )
+    assert meta["http_status"] == 200
+    assert meta["response_bytes"] == len(captured[0])
+    assert meta["response_sha256"] == hashlib.sha256(captured[0]).hexdigest()
+    assert "response_body_utf8" not in meta and "response_json" not in meta
+    assert receipt["estimated_cost_usd"] is None
+    assert receipt["cost_estimate_complete"] is False
+
+
+def test_repeated_member_names_in_distinct_objects_remain_valid(pack, storage):
+    plan, _ = approved_plan(pack, storage)
+
+    def split_text(req, response, net):
+        if req.url.path.endswith(":generateContent"):
+            value = response.json()
+            content = value["candidates"][0]["content"]
+            text = content["parts"][0]["text"]
+            midpoint = len(text) // 2
+            content["parts"] = [{"text": text[:midpoint]}, {"text": text[midpoint:]}]
+            return httpx.Response(200, json=value)
+        return response
+
+    net = Network(split_text)
+    result, receipt = execute(pack, storage, plan, net)
+    assert result["exit_code"] == 0 and receipt["comparable_pair"]
+    assert len(net.requests) == 4
+    run = Path(result["receipt"]).parents[1]
+    for path in (run / "internal/requests").glob("*-response.json"):
+        meta = json.loads(path.read_text())
+        assert (
+            hashlib.sha256(meta["response_body_utf8"].encode()).hexdigest()
+            == meta["response_sha256"]
+        )

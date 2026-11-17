@@ -37,6 +37,16 @@ def redact(value, key):
     return visit(value), lambda: found
 
 
+def unique_response_members(pairs):
+    value = {}
+    for name, member in pairs:
+        if name in value:
+            # Discarding an earlier member could hide a Key from redaction.
+            raise ValueError("duplicate_response_member")
+        value[name] = member
+    return value
+
+
 class GeminiTransport:
     def __init__(self, key, timeout, client_factory=None):
         self.key = key
@@ -104,9 +114,11 @@ class GeminiTransport:
                 # Error text can echo credentials; retain only status/size/hash.
                 raise TransportError(code, metadata)
             try:
-                value = base.object_json(raw, "provider_response_invalid")
+                value = json.loads(raw, object_pairs_hook=unique_response_members)
+                if not isinstance(value, dict):
+                    raise base.GuardError("provider_response_invalid")
                 clean, detected = redact(value, self.key)
-            except (base.GuardError, RecursionError):
+            except (base.GuardError, ValueError, UnicodeError, RecursionError):
                 raise TransportError("provider_response_invalid", metadata) from None
             metadata["credential_redacted"] = detected()
             metadata["response_json"] = clean

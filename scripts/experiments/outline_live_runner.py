@@ -67,6 +67,7 @@ def run_live_pair(
     plan = None
     task = None
     order = list(base.GROUPS)
+    rng = None
     try:
         plan, raw_plan = load_plan(plan_file, task_dir)
         plan_hash = base.digest(raw_plan)
@@ -302,8 +303,9 @@ def run_live_pair(
         for r in receipt["results"]
         if r.get("output_id")
     ]
-    if plan is not None:
-        random.Random(plan["order_seed"]).shuffle(outputs)
+    if rng is not None:
+        # Replaying the first two-item permutation would expose fixed group positions.
+        rng.shuffle(outputs)
     receipt["comparable_pair"] = (
         receipt["exit_code"] == 0
         and len(receipt["results"]) == 2
