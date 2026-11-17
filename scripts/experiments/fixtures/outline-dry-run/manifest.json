@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "task_id": "SYNTHETIC-OUTLINE",
+  "author_approved": true,
+  "dataset_frozen": true,
+  "execution_authorized": false,
+  "model_generation_calls": 0,
+  "model_judging_calls": 0,
+  "approval": {
+    "protocol_approved": true,
+    "scope": [
+      "common-input.md",
+      "evaluation-reference.md"
+    ],
+    "basis": "Synthetic fixture validation only; no model execution approval"
+  },
+  "protocol_approval": {
+    "scope": [
+      "pilot-protocol.md",
+      "generation-conditions.md",
+      "author-review-form.md"
+    ],
+    "file_sha256": {
+      "pilot-protocol.md": "cbac7b6f1278c37fa9bd612ac9c10f62ad28b662f8f2455072b56ba1f8bc8c40",
+      "generation-conditions.md": "de90b160a3050f18439f86353990c6b1fbcccf092ef6e8945f281e39be4ec35f",
+      "author-review-form.md": "558c5214eb549bb79e66ff693dcd44afe6cfe8a276eea10c07b465940193a5f3"
+    }
+  },
+  "provenance": {
+    "source_type": "synthetic_fixture",
+    "external_model_transmission_authorized": false,
+    "actual_character_or_relationship_database_export": false
+  },
+  "files": {
+    "common-input.md": {
+      "sha256": "e07b7f984c23faa2a3baff63c3e8a0326bd6f0b903f1b7155195e61170a2aa1b",
+      "bytes": 406
+    },
+    "evaluation-reference.md": {
+      "sha256": "ad6713290053efd5959b59acf4ebb31bff1697994ce34a3d65c9ef33aa9430d1",
+      "bytes": 182
+    },
+    "pilot-protocol.md": {
+      "sha256": "cbac7b6f1278c37fa9bd612ac9c10f62ad28b662f8f2455072b56ba1f8bc8c40",
+      "bytes": 260
+    },
+    "generation-conditions.md": {
+      "sha256": "de90b160a3050f18439f86353990c6b1fbcccf092ef6e8945f281e39be4ec35f",
+      "bytes": 497
+    },
+    "author-review-form.md": {
+      "sha256": "558c5214eb549bb79e66ff693dcd44afe6cfe8a276eea10c07b465940193a5f3",
+      "bytes": 223
+    }
+  }
+}
