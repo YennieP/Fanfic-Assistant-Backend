@@ -100,7 +100,7 @@ def _wrap_generator(gen, feature, start, user_id, req_id, sync, generation_id):
       _wrap_generator 返回后，event_stream() 才执行 yield done 事件。
       因此前端收到 done 时，LlmCallLog 已落库，generationId 可立即用于查询。
     """
-    from generation.providers.base import UsageInfo
+    from generation.providers.base import UsageInfo, close_provider_resource
 
     usage_info = None
     try:
@@ -143,6 +143,8 @@ def _wrap_generator(gen, feature, start, user_id, req_id, sync, generation_id):
             latency_ms=latency, status='success',
             error_message='', request_id=req_id, user_id=user_id,
         )
+    finally:
+        close_provider_resource(gen)
 
 
 def _log(sync: bool, generation_id, **kwargs):

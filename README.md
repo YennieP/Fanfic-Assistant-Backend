@@ -121,7 +121,9 @@ Windows：
 - `fragments/merge` 按 UUID 顺序锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 和待删片段的子关系后，在一个短事务内更新保留片段并删除另一片段；重复、过期或父子选择不会部分写入。
 - article segment 会在全部 LLM 调用和结果验证结束后进入短事务，先锁定 Article，再按 UUID 顺序锁定实际待替换草稿；任一待删草稿存在直接子片段（包括父子同时位于替换集合）时返回 409 `fragment_state_conflict`，保留全部旧草稿且不创建新片段。
 - `FragmentSerializer.parent_fragment` 在 Phase 3 建立正式父子写入契约前保持只读；当前 API 不接受客户端创建或改写父子关系。
-- Embedding 固定使用 Gemini `gemini-embedding-001`，与文本生成 provider 分离。
+- Gemini SDK 固定为 `google-genai==3.5.0`；生成与 embedding 共用显式 Developer API / `v1beta`、SDK `attempts=1` 和 120,000 ms HTTP I/O timeout。应用层仍仅对 503 与网络故障重试：complete 最多 5 次、stream 收到任意首个 chunk 前最多 7 次；429 和首个 chunk 后的故障不重试。SDK 自动 continuation 已关闭，避免在应用重试上界之外续写；模型仍为 `gemini-2.5-flash`，prompt、输出预算、thinking hint 和业务 parser 的模型迁移另批处理。
+- Gemini client、SDK iterator 与底层 HTTP response 在正常、异常、空流及取消路径显式释放；失败的流在退避前释放，Django 响应关闭向内传播。清理失败仅记录异常类型，不覆盖原结果/业务错误。120 秒是每次 HTTP I/O 的限制，外层重试会延长总耗时，不能作为端到端硬 deadline；Gunicorn 的 180 秒 timeout 也不等于 `gthread` 单个请求的墙钟上限。
+- Embedding 固定使用 Gemini `gemini-embedding-001`、768 维，与文本生成 provider 分离；仅复用 SDK transport / 资源策略，不重算存量向量。合成 MockTransport 验证不证明真实模型可用性或向量数值兼容，生产迁移及验收见跨系统 [ToDo](https://github.com/YennieP/Fanfic-Assistant/blob/main/docs/ToDo.md) 的 PROV-009。
 - `/health/live/` 只验证 Django 进程能够响应；`/health/` 额外执行 `SELECT 1` 验证主数据库可用，失败时返回不含连接细节的 HTTP 503。健康检查不写入业务日志表；Railway 固定使用的 `healthcheck.railway.app` Host 已显式加入允许列表，其他部署域名仍由 `ALLOWED_HOSTS` 环境变量控制。
 
 ## 部署
