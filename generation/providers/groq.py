@@ -6,6 +6,7 @@ from .base import (
     CompletionOptions,
     ProviderError,
     UsageInfo,
+    completion_finish_reason,
 )
 from .catalog import get_provider_definition
 
@@ -146,6 +147,7 @@ class GroqProvider(BaseProvider):
                     model=self.MODEL,
                     prompt_tokens=usage.prompt_tokens if usage else 0,
                     completion_tokens=usage.completion_tokens if usage else 0,
+                    finish_reason=completion_finish_reason(getattr(response.choices[0], 'finish_reason', None)),
                 )
 
             except groq_sdk.AuthenticationError:

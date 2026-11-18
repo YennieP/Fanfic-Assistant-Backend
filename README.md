@@ -117,6 +117,8 @@ Windows：
 - `PATCH /api/examples/fragments/{id}/` 继续只识别 `text` 与 `tags`，并强制要求客户端同时提交 `updatedAt` 和至少一个上述可变字段；任一可变字段存在都会撤销确认并清空 embedding，成功响应仍返回推进版本后的完整 Fragment。缺少或格式无效的 `updatedAt`、空 PATCH 及仅版本 PATCH 均返回 400 且不写入；版本不匹配或读取后片段被删除返回 409 `fragment_state_conflict`，不会写入任何字段或复活记录。请求开始前已不存在及越权仍保持 404，GET 行为不变。
 - `DELETE /api/examples/fragments/{id}/` 强制要求客户端提交 `updatedAt`。后端在短事务中用 `select_for_update()` 锁定属于当前用户的目标，并在锁内核对版本和子片段关系；版本不匹配或存在 `child_fragments` 时返回 409 `fragment_state_conflict` 且不删除任何记录，当前版本且无子片段时返回 204。缺少或格式无效的版本返回 400；请求开始前已不存在、越权及重复删除保持 404。普通 DELETE 不级联删除子片段。
 - 单组冲突处理必须同时提交旧、新片段的 `updated_at` 版本；版本缺失或与当前记录不一致时不会执行写入。
+- `POST /api/examples/fragments/{id}/infer-tags/` 在条件更新前验证模型输出：必须是完整 JSON 对象（兼容完整 JSON 代码块），仅含片段标签字段，类型与值符合所选语言的 TAXONOMY；重复 JSON 成员、非有限数、无效结构/标签、空正文和已知非正常结束均返回 500 `generation_failed`，不改变 Fragment 的标签、版本、确认状态或 embedding。不会提取解释中的 JSON 子串、修复截断对象或自动重试模型。明确的 `{}`、null/空情绪及既有字符串 `"null"` 可表示合法无标签结果；成功推断仍经现有 CAS 保存并撤销确认/清空 embedding，陈旧结果仍为 409。手动 PATCH 的自定义标签规则不变。
+- 同步 `CompleteResult` 增加可选的内部 `finish_reason`，由各 SDK 的结束字段传递；标签推断拒绝已报告的截断、拒答或其他非成功结束。缺失元数据保留为未知并仍严格检查 JSON/标签，不假定为正常结束；其他功能的 parser、API/日志字段、token 预算与 usage 含义保持，模型与 SDK 迁移另批验收。
 - `resolve-conflict` 在短数据库事务内锁定双方片段，校验版本、状态及待删片段的子关系后，才完成保留片段更新、残余片段创建和舍弃片段删除。`resolve-conflicts` 同样必须提供每一组冲突及双方版本，并在一个事务中采用全部新版；任一待删片段存在直接子片段时整批返回 409 且零写入。外部 LLM 调用不在这些事务中。
 - `fragments/merge` 按 UUID 顺序锁定同一用户、同一文章的两个片段，校验双方 `updated_at` 和待删片段的子关系后，在一个短事务内更新保留片段并删除另一片段；重复、过期或父子选择不会部分写入。
 - article segment 会在全部 LLM 调用和结果验证结束后进入短事务，先锁定 Article，再按 UUID 顺序锁定实际待替换草稿；任一待删草稿存在直接子片段（包括父子同时位于替换集合）时返回 409 `fragment_state_conflict`，保留全部旧草稿且不创建新片段。

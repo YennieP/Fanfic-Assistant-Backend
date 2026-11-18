@@ -12,6 +12,7 @@ from .base import (
     ProviderError,
     UsageInfo,
     close_provider_resource,
+    completion_finish_reason,
 )
 from .catalog import get_provider_definition
 from .gemini_client import managed_gemini_client
@@ -234,6 +235,7 @@ class GeminiProvider(BaseProvider):
                         model=self.MODEL,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
+                        finish_reason=completion_finish_reason(raw_finish_reason),
                     )
                 except ClientError as e:
                     raise _client_error(e) from None

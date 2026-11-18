@@ -7,6 +7,7 @@ from .base import (
     CompletionOptions,
     ProviderError,
     UsageInfo,
+    completion_finish_reason,
 )
 from .catalog import get_provider_definition
 
@@ -142,6 +143,7 @@ class AnthropicProvider(BaseProvider):
                     model=self.MODEL,
                     prompt_tokens=msg.usage.input_tokens,
                     completion_tokens=msg.usage.output_tokens,
+                    finish_reason=completion_finish_reason(getattr(msg, 'stop_reason', None)),
                 )
 
             except anthropic_sdk.AuthenticationError:

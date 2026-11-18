@@ -29,6 +29,17 @@ class CompleteResult:
     model: str
     prompt_tokens: int
     completion_tokens: int
+    # Optional internal termination metadata. Existing consumers keep their
+    # result/token semantics; tag inference alone uses it to reject truncation.
+    finish_reason: str | None = None
+
+
+def completion_finish_reason(reason) -> str | None:
+    """Preserve SDK strings/enums; absent metadata is unknown, not success."""
+    if reason is None:
+        return None
+    value = getattr(reason, 'value', reason)
+    return value if isinstance(value, str) else 'UNKNOWN'
 
 
 CompletionResponseFormat = Literal['json', 'text']
