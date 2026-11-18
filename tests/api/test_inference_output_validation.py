@@ -110,6 +110,7 @@ def test_known_incomplete_finish_rejects_even_valid_json(api_client,user_factory
 
 @pytest.mark.django_db
 @pytest.mark.parametrize('raw', ['{}','{"scene_type":null,"emotion":{"shared":[],"intensity":null}}',
+    '{"scene_type":"null","emotion":{"shared":[null,"null"],"intensity":"null"}}',
     '{"scene_type":null,"scene_privacy":null,"initiative":null,"emotion":{"shared":null,"intensity":null},"target_type":null,"target_count":null,"relationship_state":null,"speech_intent":null}'])
 def test_explicit_no_label_is_successful_inference(api_client,user_factory,monkeypatch,raw):
     user=user_factory();fragment=make_fragment(user);before=snapshot(fragment)
@@ -134,6 +135,24 @@ def test_valid_sparse_tags_keep_language_and_legacy_emotion_normalization(api_cl
     response=request(api_client,user,fragment,RawProvider(text,finish),monkeypatch,lang)
     assert response.status_code==200
     assert response.data['tags']=={'scene_type':taxonomy['scene_type'][0],'emotion':{'shared':[taxonomy['emotion']['shared'][0]]}}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('lang',['zh','en'])
+def test_full_tag_shape_with_multiple_emotions_remains_usable(api_client,user_factory,monkeypatch,lang):
+    taxonomy=TAXONOMY_EN if lang=='en' else TAXONOMY
+    expected={field:taxonomy[field][0] for field in ['scene_type','scene_privacy','initiative','target_type','target_count','relationship_state','speech_intent']}
+    expected['emotion']={'shared':taxonomy['emotion']['shared'][:2],'intensity':taxonomy['emotion']['intensity'][0]}
+    user=user_factory();fragment=make_fragment(user)
+    response=request(api_client,user,fragment,RawProvider(json.dumps(expected,ensure_ascii=False),'STOP'),monkeypatch,lang)
+    assert response.status_code==200 and response.data['tags']==expected
+
+
+@pytest.mark.django_db
+def test_wrong_language_label_does_not_replace_existing_tags(api_client,user_factory,monkeypatch):
+    user=user_factory();fragment=make_fragment(user);before=snapshot(fragment)
+    response=request(api_client,user,fragment,RawProvider('{"scene_type":"日常闲聊"}','STOP'),monkeypatch,'en')
+    assert response.status_code==500 and response.data==ERROR and snapshot(fragment)==before
 
 
 @pytest.mark.django_db
