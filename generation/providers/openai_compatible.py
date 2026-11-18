@@ -10,7 +10,7 @@ from collections.abc import Generator
 import httpx
 from openai import OpenAI
 
-from .base import CompleteResult, CompletionOptions, UsageInfo
+from .base import CompleteResult, CompletionOptions, UsageInfo, completion_finish_reason
 
 
 DEFAULT_TIMEOUT = httpx.Timeout(
@@ -111,4 +111,5 @@ def complete_chat(
         model=model,
         prompt_tokens=usage.prompt_tokens if usage else 0,
         completion_tokens=usage.completion_tokens if usage else 0,
+        finish_reason=completion_finish_reason(getattr(response.choices[0], 'finish_reason', None)),
     )

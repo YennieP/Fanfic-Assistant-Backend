@@ -19,6 +19,7 @@ from logs.decorators import log_llm_call
 
 from core.taxonomy import TAXONOMY, TAXONOMY_EN
 from generation.providers.base import CompletionOptions
+from .inference_output import parse_inferred_tags
 
 logger = logging.getLogger(__name__)
 
@@ -300,10 +301,12 @@ def infer_tags(fragment_text: str, provider, language: str = 'zh', user=None) ->
         taxonomy_options=_build_taxonomy_options(taxonomy)
     )
     _infer_prompt = f'请为以下片段打标签：\n\n{fragment_text}'
+    parsed_tags = None
 
     @log_llm_call(feature='tag_inference', sync=True)
     def _call_infer(user=None, generation_id=None):
-        return provider.complete(
+        nonlocal parsed_tags
+        result = provider.complete(
             system_prompt=system,
             user_prompt=_infer_prompt,
             options=CompletionOptions(
@@ -312,12 +315,19 @@ def infer_tags(fragment_text: str, provider, language: str = 'zh', user=None) ->
                 reasoning_effort='low',
             ),
         )
+        # Validate inside the logged call so an unusable model result is an
+        # error, not a successful tag inference. Nothing reaches CAS on failure.
+        parsed_tags = parse_inferred_tags(
+            result.text,
+            finish_reason=getattr(result, 'finish_reason', None),
+            taxonomy=taxonomy,
+        )
+        return result
 
     raw_text = _call_infer(user=user, generation_id=uuid.uuid4()).text
     logger.info('[infer_tags] raw LLM output: %s', raw_text)
-    raw = _parse_json(raw_text)
-    logger.info('[infer_tags] parsed result: %s', raw)
-    return _clean_tags(raw)
+    logger.info('[infer_tags] parsed result: %s', parsed_tags)
+    return _clean_tags(parsed_tags)
 
 
 # ── Utilities ────────────────────────────────────────────────────────────────
