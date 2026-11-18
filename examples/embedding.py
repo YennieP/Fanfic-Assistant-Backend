@@ -8,8 +8,8 @@ Phase 3 升级接口：
 - 升级时新增 content_to_text() 负责内容向量（A2）
 - 检索层加权合并两者，此文件无需其他改动
 """
-from google import genai as google_genai
 from google.genai import types as genai_types
+from generation.providers.gemini_client import managed_gemini_client
 
 EMBEDDING_MODEL = 'gemini-embedding-001'
 EMBEDDING_DIMENSIONS = 768  # 用 MRL 截断至 768 维，与现有 VectorField schema 对齐
@@ -17,15 +17,15 @@ EMBEDDING_DIMENSIONS = 768  # 用 MRL 截断至 768 维，与现有 VectorField 
 
 def get_embedding(text: str, api_key: str) -> list[float]:
     """使用 Gemini gemini-embedding-001 计算文本向量，输出 768 维。"""
-    client = google_genai.Client(api_key=api_key)
-    result = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=genai_types.EmbedContentConfig(
-            output_dimensionality=EMBEDDING_DIMENSIONS,
-        ),
-    )
-    return result.embeddings[0].values
+    with managed_gemini_client(api_key) as (client, _release_responses):
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=text,
+            config=genai_types.EmbedContentConfig(
+                output_dimensionality=EMBEDDING_DIMENSIONS,
+            ),
+        )
+        return result.embeddings[0].values
 
 
 def tags_to_text(tags: dict) -> str:

@@ -1,6 +1,19 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import logging
 from typing import Generator, Literal, Union
+
+
+def close_provider_resource(resource) -> None:
+    """Best-effort explicit cleanup; never replace a result or the primary error."""
+    try:
+        close = getattr(resource, 'close', None)
+        if close is not None:
+            close()
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            'Provider resource close failed type=%s', type(exc).__name__,
+        )
 
 
 @dataclass

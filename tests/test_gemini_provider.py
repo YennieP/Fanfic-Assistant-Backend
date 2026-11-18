@@ -36,11 +36,11 @@ def test_gemini_complete_requests_structured_json_and_logs_safe_capacity(
             return _Response()
 
     class _Client:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **_kwargs):
             assert api_key == 'test-key'
             self.models = _Models()
 
-    monkeypatch.setattr('generation.providers.gemini.genai.Client', _Client)
+    monkeypatch.setattr('generation.providers.gemini_client.genai.Client', _Client)
     monkeypatch.setattr(
         'generation.providers.gemini.logger.info',
         lambda message, *args: telemetry.append(message % args),
@@ -78,8 +78,8 @@ def test_gemini_complete_text_mode_does_not_force_json(monkeypatch):
             return _Response()
 
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: type('Client', (), {'models': _Models()})(),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: type('Client', (), {'models': _Models()})(),
     )
 
     GeminiProvider('test-key').complete(

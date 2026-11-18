@@ -389,8 +389,8 @@ def test_gemini_429_is_safe_rate_limit(monkeypatch, method):
     models = _Models()
     sleeps = []
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=models),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=models),
     )
     monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
 
@@ -430,8 +430,8 @@ def test_gemini_complete_waits_only_between_retry_attempts(
     models = _Models()
     sleeps = []
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=models),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=models),
     )
     monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
 
@@ -465,8 +465,8 @@ def test_gemini_stream_waits_only_between_retry_attempts(
     models = _Models()
     sleeps = []
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=models),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=models),
     )
     monkeypatch.setattr('generation.providers.gemini.time.sleep', sleeps.append)
 
@@ -680,8 +680,8 @@ def test_gemini_transport_errors_are_safe(
 
     models = _Models()
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=models),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=models),
     )
     monkeypatch.setattr('generation.providers.gemini.time.sleep', lambda _wait: None)
 
@@ -703,8 +703,8 @@ def test_gemini_402_is_safe_payment_required(monkeypatch):
             raise error
 
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=_Models()),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=_Models()),
     )
 
     with pytest.raises(ProviderError) as exc_info:
@@ -741,8 +741,8 @@ def test_gemini_midstream_error_is_safe_and_never_retried(
 
     models = _Models()
     monkeypatch.setattr(
-        'generation.providers.gemini.genai.Client',
-        lambda api_key: SimpleNamespace(models=models),
+        'generation.providers.gemini_client.genai.Client',
+        lambda api_key, **_kwargs: SimpleNamespace(models=models),
     )
 
     result = GeminiProvider('key').stream('system', 'user')

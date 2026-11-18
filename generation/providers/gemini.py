@@ -1,7 +1,8 @@
 import time
 import logging
 import requests
-from google import genai
+import httpx
+import httpx2
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
 from .base import (
@@ -10,14 +11,20 @@ from .base import (
     CompletionOptions,
     ProviderError,
     UsageInfo,
+    close_provider_resource,
 )
 from .catalog import get_provider_definition
+from .gemini_client import managed_gemini_client
 
 logger = logging.getLogger(__name__)
 
 _RETRY_CODES = {503}
 _STREAM_ATTEMPTS = 7
 _COMPLETE_ATTEMPTS = 5
+_TIMEOUT_ERRORS = (requests.Timeout, httpx.TimeoutException, httpx2.TimeoutException)
+_TRANSPORT_ERRORS = (
+    requests.ConnectionError, httpx.TransportError, httpx2.TransportError,
+) + _TIMEOUT_ERRORS
 
 
 def _client_error(error: ClientError) -> ProviderError:
@@ -65,7 +72,7 @@ def _server_error(error: ServerError) -> ProviderError:
 
 
 def _transport_error(error: Exception) -> ProviderError:
-    if isinstance(error, requests.Timeout):
+    if isinstance(error, _TIMEOUT_ERRORS):
         return ProviderError(
             'Gemini 响应超时，请稍后重试',
             code='provider_timeout',
@@ -85,113 +92,86 @@ class GeminiProvider(BaseProvider):
     supports_embedding = _DEFINITION.supports_embedding
 
     def stream(self, system_prompt: str, user_prompt: str):
-        """
-        真实 streaming 实现，重试策略限定于「建立连接 + 收到第一个 chunk」阶段。
-
-        设计取舍：
-        - 一旦开始 yield chunk，不再重试——因为此时前端已收到部分文字，
-          重试会导致内容重复。中途断流只归一化为安全 ProviderError，
-          再由 views.py 转换为 SSE error 事件。
-        - 实践中 503/429 几乎只发生在请求建立阶段，流式中途断流概率极低。
-        - 与原缓冲方案（7 次全程重试）的差异：仅在建立连接阶段重试，UX 显著改善
-          （用户 1-2 秒内看到第一个字），接受中途断流时无法续传的代价。
-        详见 architecture.md「Gemini Streaming 设计」章节。
-        """
-        client = genai.Client(api_key=self.api_key)
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=4000,
-        )
-
-        # ── 阶段一：建立连接 + 获取第一个 chunk，失败可重试 ─────────────────
-        last_error = None
-        stream_iter = None
-        usage = None
-
-        for attempt in range(_STREAM_ATTEMPTS):
+        """Retry only until any first SDK chunk, including metadata-only chunks."""
+        with managed_gemini_client(self.api_key) as (client, release_responses):
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=4000,
+                automatic_continuation=False,
+            )
+            stream_iter = None
+            usage = None
+            first_chunk = None
             try:
-                stream_iter = client.models.generate_content_stream(
-                    model=self.MODEL,
-                    contents=user_prompt,
-                    config=config,
-                )
-                # 调用 next() 触发真正的网络请求，确认连接成功
-                first_chunk = next(stream_iter)
-                if first_chunk.text:
-                    yield first_chunk.text
-                if first_chunk.usage_metadata:
-                    usage = first_chunk.usage_metadata
-                break  # 连接成功，退出重试循环
-            except StopIteration:
-                # 模型返回了空响应，不重试
-                break
-            except ClientError as e:
-                # 4xx 错误不重试，按状态转为安全的业务错误。
-                raise _client_error(e) from None
-            except ServerError as e:
-                if e.code in _RETRY_CODES:
-                    last_error = e
-                    stream_iter = None
-                    if attempt < _STREAM_ATTEMPTS - 1:
-                        wait = min(2 ** attempt, 32)
-                        logger.warning(
-                            'Gemini status=%s model=%s attempt=%d; '
-                            'retrying in %ds',
-                            e.code, self.MODEL, attempt + 1, wait,
+                for attempt in range(_STREAM_ATTEMPTS):
+                    connected = False
+                    try:
+                        stream_iter = client.models.generate_content_stream(
+                            model=self.MODEL, contents=user_prompt, config=config,
                         )
-                        time.sleep(wait)
-                else:
-                    raise _server_error(e) from None
-            except (requests.Timeout, requests.ConnectionError) as e:
-                last_error = e
-                stream_iter = None
-                if attempt < _STREAM_ATTEMPTS - 1:
+                        first_chunk = next(stream_iter)
+                        connected = True
+                        break
+                    except StopIteration:
+                        # An empty response is terminal, not a retry trigger.
+                        connected = True
+                        break
+                    except ClientError as exc:
+                        raise _client_error(exc) from None
+                    except ServerError as exc:
+                        if exc.code not in _RETRY_CODES:
+                            raise _server_error(exc) from None
+                        last_error = exc
+                    except _TRANSPORT_ERRORS as exc:
+                        last_error = exc
+                    finally:
+                        if not connected:
+                            close_provider_resource(stream_iter)
+                            stream_iter = None
+                            release_responses()
+
+                    if attempt == _STREAM_ATTEMPTS - 1:
+                        if isinstance(last_error, _TRANSPORT_ERRORS):
+                            raise _transport_error(last_error) from None
+                        raise _server_error(last_error) from None
                     wait = min(2 ** attempt, 32)
                     logger.warning(
-                        'Gemini transport=%s model=%s attempt=%d; '
+                        'Gemini retry model=%s attempt=%d status=%s transport=%s; '
                         'retrying in %ds',
-                        type(e).__name__, self.MODEL, attempt + 1, wait,
+                        self.MODEL, attempt + 1, getattr(last_error, 'code', None),
+                        type(last_error).__name__, wait,
                     )
+                    # Release the failed iterator before waiting or opening another.
                     time.sleep(wait)
-        else:
-            # 7 次请求全部失败
-            if last_error and getattr(last_error, 'code', None) == 429:
-                raise ProviderError(
-                    'Gemini 请求频率或额度已受限，请稍后重试',
-                    code='provider_rate_limit',
-                    http_status=429,
-                ) from None
-            if isinstance(last_error, (requests.Timeout, requests.ConnectionError)):
-                raise _transport_error(last_error) from None
-            raise ProviderError(
-                'Gemini 服务暂时不可用，请稍后再试',
-                code='provider_temporarily_unavailable',
-                http_status=503,
-            ) from None
 
-        if stream_iter is None:
-            # 所有请求失败时已在上方 raise，此处不可达。
-            return
+                # Once even a metadata-only chunk is received, never replay the
+                # stream. Mid-stream errors and GeneratorExit reach the finally.
+                try:
+                    if first_chunk is not None:
+                        if first_chunk.text:
+                            yield first_chunk.text
+                        if first_chunk.usage_metadata:
+                            usage = first_chunk.usage_metadata
+                    for chunk in stream_iter:
+                        if chunk.text:
+                            yield chunk.text
+                        if chunk.usage_metadata and chunk.usage_metadata.candidates_token_count:
+                            usage = chunk.usage_metadata
+                except ClientError as exc:
+                    raise _client_error(exc) from None
+                except ServerError as exc:
+                    raise _server_error(exc) from None
+                except _TRANSPORT_ERRORS as exc:
+                    raise _transport_error(exc) from None
+            finally:
+                close_provider_resource(stream_iter)
+                release_responses()
 
-        # ── 阶段二：消费剩余 chunk，不再重试 ────────────────────────────────
-        try:
-            for chunk in stream_iter:
-                if chunk.text:
-                    yield chunk.text
-                if chunk.usage_metadata and chunk.usage_metadata.candidates_token_count:
-                    usage = chunk.usage_metadata
-        except ClientError as e:
-            raise _client_error(e) from None
-        except ServerError as e:
-            raise _server_error(e) from None
-        except (requests.Timeout, requests.ConnectionError) as e:
-            raise _transport_error(e) from None
-
-        yield UsageInfo(
-            model=self.MODEL,
-            prompt_tokens=usage.prompt_token_count if usage else 0,
-            completion_tokens=usage.candidates_token_count if usage else 0,
-        )
+            yield UsageInfo(
+                model=self.MODEL,
+                prompt_tokens=usage.prompt_token_count if usage else 0,
+                completion_tokens=usage.candidates_token_count if usage else 0,
+            )
 
     def complete(
         self,
@@ -200,96 +180,97 @@ class GeminiProvider(BaseProvider):
         *,
         options: CompletionOptions,
     ) -> CompleteResult:
-        client = genai.Client(api_key=self.api_key)
-        config_kwargs = {
-            'system_instruction': system_prompt,
-            'max_output_tokens': options.max_tokens,
-        }
-        if options.response_format == 'json':
-            config_kwargs['response_mime_type'] = 'application/json'
-        config = types.GenerateContentConfig(**config_kwargs)
+        with managed_gemini_client(self.api_key) as (client, _release_responses):
+            config_kwargs = {
+                'system_instruction': system_prompt,
+                'max_output_tokens': options.max_tokens,
+                'automatic_continuation': False,
+            }
+            if options.response_format == 'json':
+                config_kwargs['response_mime_type'] = 'application/json'
+            config = types.GenerateContentConfig(**config_kwargs)
 
-        last_error = None
-        for attempt in range(_COMPLETE_ATTEMPTS):
-            try:
-                response = client.models.generate_content(
-                    model=self.MODEL,
-                    contents=user_prompt,
-                    config=config,
-                )
-                usage = response.usage_metadata
-                candidate = response.candidates[0] if response.candidates else None
-                raw_finish_reason = getattr(candidate, 'finish_reason', None)
-                finish_reason = (
-                    getattr(raw_finish_reason, 'value', None)
-                    or str(raw_finish_reason or 'UNKNOWN')
-                )
-                prompt_tokens = usage.prompt_token_count if usage else 0
-                completion_tokens = usage.candidates_token_count if usage else 0
-                total_tokens = usage.total_token_count if usage else 0
-                prompt_tokens = prompt_tokens or 0
-                completion_tokens = completion_tokens or 0
-                total_tokens = total_tokens or 0
-                unattributed_tokens = max(
-                    0, total_tokens - prompt_tokens - completion_tokens,
-                )
-                # Capacity telemetry only: never log prompts, model output, or
-                # API keys. "unattributed" is intentionally neutral because
-                # google-genai 1.0.0 does not expose a thoughts_token_count.
-                logger.info(
-                    'Gemini complete capacity: model=%s finish_reason=%s '
-                    'prompt_tokens=%d completion_tokens=%d total_tokens=%d '
-                    'unattributed_tokens=%d max_output_tokens=%d',
-                    self.MODEL,
-                    finish_reason,
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                    unattributed_tokens,
-                    options.max_tokens,
-                )
-                return CompleteResult(
-                    text=response.text,
-                    model=self.MODEL,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                )
-            except ClientError as e:
-                raise _client_error(e) from None
-            except ServerError as e:
-                if e.code in _RETRY_CODES:
+            last_error = None
+            for attempt in range(_COMPLETE_ATTEMPTS):
+                try:
+                    response = client.models.generate_content(
+                        model=self.MODEL,
+                        contents=user_prompt,
+                        config=config,
+                    )
+                    usage = response.usage_metadata
+                    candidate = response.candidates[0] if response.candidates else None
+                    raw_finish_reason = getattr(candidate, 'finish_reason', None)
+                    finish_reason = (
+                        getattr(raw_finish_reason, 'value', None)
+                        or str(raw_finish_reason or 'UNKNOWN')
+                    )
+                    prompt_tokens = usage.prompt_token_count if usage else 0
+                    completion_tokens = usage.candidates_token_count if usage else 0
+                    total_tokens = usage.total_token_count if usage else 0
+                    prompt_tokens = prompt_tokens or 0
+                    completion_tokens = completion_tokens or 0
+                    total_tokens = total_tokens or 0
+                    unattributed_tokens = max(
+                        0, total_tokens - prompt_tokens - completion_tokens,
+                    )
+                    # Capacity telemetry only: never log prompts, model output, or
+                    # API keys. Preserve the existing neutral "unattributed"
+                    # definition; thinking attribution is a separate migration.
+                    logger.info(
+                        'Gemini complete capacity: model=%s finish_reason=%s '
+                        'prompt_tokens=%d completion_tokens=%d total_tokens=%d '
+                        'unattributed_tokens=%d max_output_tokens=%d',
+                        self.MODEL,
+                        finish_reason,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        unattributed_tokens,
+                        options.max_tokens,
+                    )
+                    return CompleteResult(
+                        text=response.text,
+                        model=self.MODEL,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                except ClientError as e:
+                    raise _client_error(e) from None
+                except ServerError as e:
+                    if e.code in _RETRY_CODES:
+                        last_error = e
+                        if attempt < _COMPLETE_ATTEMPTS - 1:
+                            wait = min(2 ** attempt, 4)
+                            logger.warning(
+                                'Gemini status=%s model=%s attempt=%d; '
+                                'retrying in %ds',
+                                e.code, self.MODEL, attempt + 1, wait,
+                            )
+                            time.sleep(wait)
+                    else:
+                        raise _server_error(e) from None
+                except _TRANSPORT_ERRORS as e:
                     last_error = e
                     if attempt < _COMPLETE_ATTEMPTS - 1:
                         wait = min(2 ** attempt, 4)
                         logger.warning(
-                            'Gemini status=%s model=%s attempt=%d; '
+                            'Gemini transport=%s model=%s attempt=%d; '
                             'retrying in %ds',
-                            e.code, self.MODEL, attempt + 1, wait,
+                            type(e).__name__, self.MODEL, attempt + 1, wait,
                         )
                         time.sleep(wait)
-                else:
-                    raise _server_error(e) from None
-            except (requests.Timeout, requests.ConnectionError) as e:
-                last_error = e
-                if attempt < _COMPLETE_ATTEMPTS - 1:
-                    wait = min(2 ** attempt, 4)
-                    logger.warning(
-                        'Gemini transport=%s model=%s attempt=%d; '
-                        'retrying in %ds',
-                        type(e).__name__, self.MODEL, attempt + 1, wait,
-                    )
-                    time.sleep(wait)
 
-        if last_error and getattr(last_error, 'code', None) == 429:
+            if last_error and getattr(last_error, 'code', None) == 429:
+                raise ProviderError(
+                    'Gemini 请求频率或额度已受限，请稍后重试',
+                    code='provider_rate_limit',
+                    http_status=429,
+                ) from None
+            if isinstance(last_error, _TRANSPORT_ERRORS):
+                raise _transport_error(last_error) from None
             raise ProviderError(
-                'Gemini 请求频率或额度已受限，请稍后重试',
-                code='provider_rate_limit',
-                http_status=429,
+                'Gemini 服务暂时不可用，请稍后再试',
+                code='provider_temporarily_unavailable',
+                http_status=503,
             ) from None
-        if isinstance(last_error, (requests.Timeout, requests.ConnectionError)):
-            raise _transport_error(last_error) from None
-        raise ProviderError(
-            'Gemini 服务暂时不可用，请稍后再试',
-            code='provider_temporarily_unavailable',
-            http_status=503,
-        ) from None

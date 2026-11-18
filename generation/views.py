@@ -12,7 +12,7 @@ from characters.models import BaseCard, AUMod
 from users.encryption import decrypt_key
 from .prompt import build_prompt
 from .provider_service import resolve_active_provider, resolve_provider
-from .providers.base import ProviderError
+from .providers.base import ProviderError, close_provider_resource
 from logs.decorators import log_llm_call
 from logs.context import request_id_var
 from users.models import UserProviderKey
@@ -266,12 +266,14 @@ class GenerateStreamView(APIView):
             return provider.stream(system_prompt, user_prompt)
 
         def event_stream():
+            stream = None
             try:
-                for chunk in _get_stream(
+                stream = _get_stream(
                     user=request.user,
                     generation_id=generation_id,
                     request_id=stream_request_id,
-                ):
+                )
+                for chunk in stream:
                     data = json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)
                     yield f'data: {data}\n\n'
 
@@ -300,6 +302,8 @@ class GenerateStreamView(APIView):
                 )
                 data = json.dumps({'type': 'error', 'code': 'generation_failed'}, ensure_ascii=False)
                 yield f'data: {data}\n\n'
+            finally:
+                close_provider_resource(stream)
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'

@@ -119,8 +119,8 @@ def _provider_with_failing_complete(monkeypatch, provider_name, error):
     elif provider_name == 'gemini':
         models = SimpleNamespace(generate_content=failing_call.create)
         monkeypatch.setattr(
-            'generation.providers.gemini.genai.Client',
-            lambda api_key: SimpleNamespace(models=models),
+            'generation.providers.gemini_client.genai.Client',
+            lambda api_key, **_kwargs: SimpleNamespace(models=models),
         )
         provider = GeminiProvider('key')
     elif provider_name == 'groq':
@@ -152,8 +152,8 @@ def _provider_with_failing_stream(monkeypatch, provider_name, error):
     elif provider_name == 'gemini':
         models = SimpleNamespace(generate_content_stream=failing_call.create)
         monkeypatch.setattr(
-            'generation.providers.gemini.genai.Client',
-            lambda api_key: SimpleNamespace(models=models),
+            'generation.providers.gemini_client.genai.Client',
+            lambda api_key, **_kwargs: SimpleNamespace(models=models),
         )
         provider = GeminiProvider('key')
     elif provider_name == 'groq':
