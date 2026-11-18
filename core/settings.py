@@ -148,6 +148,11 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'WARNING')
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        'safe_gemini_warning': {
+            '()': 'generation.diagnostics.SafeGeminiWarningFilter',
+        },
+    },
     'formatters': {
         'standard': {
             # asctime levelname name: message
@@ -160,6 +165,7 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'standard',
+            'filters': ['safe_gemini_warning'],
         },
     },
     'root': {
@@ -168,6 +174,11 @@ LOGGING = {
         'level': LOG_LEVEL,
     },
     'loggers': {
+        'py.warnings': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
         'generation.providers.gemini': {
             'handlers': ['console'],
             # Safe capacity telemetry contains only model/status/token counts.
