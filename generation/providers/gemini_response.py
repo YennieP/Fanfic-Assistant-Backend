@@ -28,7 +28,8 @@ def response_metadata(response, requested_model, previous=None):
         getattr(response, 'model_version', None), requested_model,
         previous.model_version,
     )
-    candidate = response.candidates[0] if response.candidates else None
+    candidates = getattr(response, 'candidates', None)
+    candidate = candidates[0] if candidates else None
     raw_finish = getattr(candidate, 'finish_reason', None)
     finish = completion_finish_reason(raw_finish) if raw_finish is not None else previous.finish_reason
     if finish == 'FINISH_REASON_UNSPECIFIED' and previous.finish_reason is not None:
