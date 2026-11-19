@@ -13,6 +13,7 @@ from logs.models import LlmCallLog
 from logs.decorators import log_llm_call
 from generation.provider_service import resolve_active_provider
 from generation.providers.base import CompletionOptions, ProviderError
+from generation.diagnostics import response_character_count
 from .models import ConsistencyScore
 from .prompt import build_judge_prompt
 
@@ -54,7 +55,7 @@ def _parse_judge_response(result_text: str) -> tuple[int, str]:
         reasoning = re.sub(r'"\s*}?\s*$', '', reasoning_raw).strip()
         return score, reasoning
 
-    raise ValueError(f'无法解析 judge 响应：{clean[:300]}')
+    raise ValueError('Unable to parse judge response')
 
 
 class EvaluateView(APIView):
@@ -148,8 +149,12 @@ class EvaluateView(APIView):
 
         try:
             score, reasoning = _parse_judge_response(result_text)
-        except Exception:
-            logger.error('Judge returned invalid response: %s', result_text)
+        except Exception as exc:
+            logger.error(
+                'Judge output invalid: code=evaluation_result_invalid '
+                'error_type=%s response_chars=%s',
+                type(exc).__name__, response_character_count(result_text),
+            )
             return Response(
                 {
                     'code': 'evaluation_result_invalid',

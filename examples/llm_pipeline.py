@@ -19,6 +19,7 @@ from logs.decorators import log_llm_call
 
 from core.taxonomy import TAXONOMY, TAXONOMY_EN
 from generation.providers.base import CompletionOptions
+from generation.diagnostics import response_character_count, finish_reason_for_log
 from .inference_output import parse_inferred_tags
 
 logger = logging.getLogger(__name__)
@@ -324,10 +325,15 @@ def infer_tags(fragment_text: str, provider, language: str = 'zh', user=None) ->
         )
         return result
 
-    raw_text = _call_infer(user=user, generation_id=uuid.uuid4()).text
-    logger.info('[infer_tags] raw LLM output: %s', raw_text)
-    logger.info('[infer_tags] parsed result: %s', parsed_tags)
-    return _clean_tags(parsed_tags)
+    result = _call_infer(user=user, generation_id=uuid.uuid4())
+    cleaned = _clean_tags(parsed_tags)
+    logger.info(
+        'Tag inference output accepted: response_chars=%s tag_field_count=%d '
+        'finish_reason=%s',
+        response_character_count(result.text), len(cleaned),
+        finish_reason_for_log(getattr(result, 'finish_reason', None)),
+    )
+    return cleaned
 
 
 # ── Utilities ────────────────────────────────────────────────────────────────

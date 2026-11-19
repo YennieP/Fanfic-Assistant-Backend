@@ -16,6 +16,7 @@ from .base import (
 )
 from .catalog import get_provider_definition
 from .gemini_client import managed_gemini_client
+from generation.diagnostics import finish_reason_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -202,10 +203,7 @@ class GeminiProvider(BaseProvider):
                     usage = response.usage_metadata
                     candidate = response.candidates[0] if response.candidates else None
                     raw_finish_reason = getattr(candidate, 'finish_reason', None)
-                    finish_reason = (
-                        getattr(raw_finish_reason, 'value', None)
-                        or str(raw_finish_reason or 'UNKNOWN')
-                    )
+                    finish_reason = finish_reason_for_log(raw_finish_reason)
                     prompt_tokens = usage.prompt_token_count if usage else 0
                     completion_tokens = usage.candidates_token_count if usage else 0
                     total_tokens = usage.total_token_count if usage else 0
