@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from typing import Generator, Literal, Union
 
@@ -16,11 +16,27 @@ def close_provider_resource(resource) -> None:
         )
 
 
+@dataclass(frozen=True)
+class ResponseMetadata:
+    """Optional reported facts, distinct from legacy requested model/counts.
+
+    Missing counts remain unknown. Auxiliary metadata does not redefine the
+    existing completion/usage value equality or any provider's DB fields.
+    """
+    model_version: str | None = None
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    candidate_tokens: int | None = None
+    thoughts_tokens: int | None = None
+    total_tokens: int | None = None
+
+
 @dataclass
 class UsageInfo:
     model: str
     prompt_tokens: int
     completion_tokens: int
+    metadata: ResponseMetadata | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -32,6 +48,7 @@ class CompleteResult:
     # Optional internal termination metadata. Existing consumers keep their
     # result/token semantics; tag inference alone uses it to reject truncation.
     finish_reason: str | None = None
+    metadata: ResponseMetadata | None = field(default=None, compare=False)
 
 
 def completion_finish_reason(reason) -> str | None:

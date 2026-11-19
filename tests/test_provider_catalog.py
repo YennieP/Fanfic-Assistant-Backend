@@ -19,7 +19,7 @@ def test_catalog_is_the_single_source_for_names_models_and_capabilities():
         for name, definition in PROVIDER_CATALOG.items()
     } == {
         'anthropic': 'claude-sonnet-4-6',
-        'gemini': 'gemini-2.5-flash',
+        'gemini': 'gemini-3.5-flash-lite',
         'groq': 'openai/gpt-oss-120b',
         'cerebras': 'gpt-oss-120b',
         'openrouter': 'google/gemma-4-31b-it:free',

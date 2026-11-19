@@ -24,7 +24,7 @@ PROVIDER_CATALOG = MappingProxyType({
     'gemini': ProviderDefinition(
         name='gemini',
         provider_class='generation.providers.gemini.GeminiProvider',
-        model='gemini-2.5-flash',
+        model='gemini-3.5-flash-lite',
         supports_video=True,
         supports_embedding=True,
     ),

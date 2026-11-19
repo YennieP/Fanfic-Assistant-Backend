@@ -8,7 +8,7 @@ _FINISH_LABELS = frozenset({
     'RECITATION', 'CONTENT_FILTER', 'REFUSAL', 'TOOL_CALLS', 'OTHER',
     'UNKNOWN', 'FINISH_REASON_UNSPECIFIED', 'BLOCKLIST', 'PROHIBITED_CONTENT',
     'SPII', 'MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL', 'IMAGE_SAFETY',
-    'PAUSE_TURN', 'ERROR',
+    'PAUSE_TURN', 'ERROR', 'CONTINUATION',
 })
 _GEMINI_ENUM_WARNING = re.compile(
     r'^[^\r\n]*[/\\]google[/\\]genai[/\\]_common\.py:\d+: UserWarning: ',

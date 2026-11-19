@@ -157,13 +157,18 @@ def test_wrong_language_label_does_not_replace_existing_tags(api_client,user_fac
 
 @pytest.mark.django_db
 @pytest.mark.parametrize('finish',['MAX_TOKENS','SAFETY'])
-def test_native_gemini_finish_is_not_lost_before_real_api_validation(api_client,user_factory,monkeypatch,finish):
+def test_native_gemini_non_success_never_reaches_inference_write(api_client,user_factory,monkeypatch,finish):
     body={'candidates':[{'content':{'parts':[{'text':'{"scene_type":"日常闲聊"}'}]},'finishReason':finish}],
           'usageMetadata':{'promptTokenCount':10,'candidatesTokenCount':5,'totalTokenCount':15}}
     state=native_client(monkeypatch,httpx2,lambda req:httpx2.Response(200,request=req,json=body))
     user=user_factory();fragment=make_fragment(user);before=snapshot(fragment)
     response=request(api_client,user,fragment,GeminiProvider('dummy-key'),monkeypatch)
-    assert response.status_code==500 and response.data==ERROR
+    # M2 rejects at the Gemini adapter before the feature parser; keep the
+    # same HTTP/code and zero-write guarantee with the provider's safe detail.
+    assert response.status_code==500 and response.data=={
+        'code':'generation_failed',
+        'detail':'Gemini 未返回完整可用的正文，请调整请求后重试',
+    }
     assert snapshot(fragment)==before and len(state.requests)==1
     assert state.closes==state.clients
     assert LlmCallLog.objects.get(user=user,feature='tag_inference').status=='error'
