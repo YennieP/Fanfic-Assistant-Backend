@@ -60,7 +60,7 @@ def test_gemini_complete_requests_structured_json_and_logs_safe_capacity(
     assert captured['config'].response_mime_type == 'application/json'
     assert captured['config'].max_output_tokens == 800
     assert (
-        'Gemini complete capacity: model=gemini-2.5-flash '
+        'Gemini complete capacity: model=gemini-3.5-flash-lite '
         'finish_reason=STOP prompt_tokens=10 completion_tokens=5 '
         'total_tokens=22 unattributed_tokens=7 max_output_tokens=800'
         in telemetry

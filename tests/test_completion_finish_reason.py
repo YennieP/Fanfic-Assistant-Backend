@@ -7,7 +7,7 @@ import openai
 import pytest
 
 from generation.providers.anthropic import AnthropicProvider
-from generation.providers.base import CompletionOptions
+from generation.providers.base import CompletionOptions, ProviderError
 from generation.providers.cerebras import CerebrasProvider
 from generation.providers.gemini import GeminiProvider
 from generation.providers.groq import GroqProvider
@@ -56,9 +56,14 @@ def test_completion_keeps_real_sdk_finish_reason(monkeypatch,provider_name,termi
         monkeypatch.setattr(path,factory)
         provider=cls('dummy-key')
     try:
-        result=provider.complete('synthetic-system','synthetic-user',options=CompletionOptions(response_format='json',max_tokens=1000))
-        assert result.text=='{}'
-        assert result.finish_reason==finish
+        if provider_name=='gemini' and termination!='normal':
+            with pytest.raises(ProviderError) as caught:
+                provider.complete('synthetic-system','synthetic-user',options=CompletionOptions(response_format='json',max_tokens=1000))
+            assert caught.value.code=='generation_failed'
+        else:
+            result=provider.complete('synthetic-system','synthetic-user',options=CompletionOptions(response_format='json',max_tokens=1000))
+            assert result.text=='{}'
+            assert result.finish_reason==finish
         assert len(state.requests if provider_name=='gemini' else wire)==1
     finally:
         if provider_name!='gemini':

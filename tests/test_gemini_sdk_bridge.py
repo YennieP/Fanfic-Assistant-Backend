@@ -197,14 +197,18 @@ def test_native_success_keeps_wire_contract_and_closes_client(monkeypatch, opera
     if operation == 'embedding':
         assert get_embedding('synthetic tags', 'dummy-key') == [0.0] * 768
     elif operation in ('stream', 'empty-stream'):
-        result = list(GeminiProvider('dummy-key').stream('system', 'user'))
-        assert result == (['result', UsageInfo('gemini-2.5-flash', 10, 5)] if operation == 'stream'
-                          else [UsageInfo('gemini-2.5-flash', 0, 0)])
+        if operation == 'empty-stream':
+            with pytest.raises(ProviderError) as caught:
+                list(GeminiProvider('dummy-key').stream('system', 'user'))
+            assert caught.value.code == 'generation_failed'
+        else:
+            result = list(GeminiProvider('dummy-key').stream('system', 'user'))
+            assert result == ['result', UsageInfo('gemini-3.5-flash-lite', 10, 5)]
     else:
         options = OPTIONS if operation == 'json' else CompletionOptions(response_format='text', max_tokens=64)
         result = GeminiProvider('dummy-key').complete('system', 'user', options=options)
         assert (result.text, result.model, result.prompt_tokens, result.completion_tokens) == (
-            'result', 'gemini-2.5-flash', 10, 5,
+            'result', 'gemini-3.5-flash-lite', 10, 5,
         )
     assert len(state.requests) == 1
     assert state.closes == state.clients
@@ -224,11 +228,12 @@ def test_native_success_keeps_wire_contract_and_closes_client(monkeypatch, opera
         assert body['requests'][0]['model'] == 'models/gemini-embedding-001'
         assert body['requests'][0]['outputDimensionality'] == 768
     else:
-        assert 'gemini-2.5-flash:' in request.url.path
+        assert 'gemini-3.5-flash-lite:' in request.url.path
         config = body['generationConfig']
         assert config['maxOutputTokens'] == (800 if operation == 'json' else 64 if operation == 'key-text' else 4000)
         assert config.get('responseMimeType') == ('application/json' if operation == 'json' else None)
-        assert 'thinkingConfig' not in config
+        thinking = config.get('thinkingConfig', config.get('thinking_config'))
+        assert thinking.get('thinkingLevel', thinking.get('thinking_level')) == 'MINIMAL'
 
 
 @pytest.mark.parametrize('fails', [False, True])
@@ -318,12 +323,15 @@ def test_native_continuation_cannot_add_hidden_wire_requests(monkeypatch, method
         return httpx2.Response(200, request=request, json=payload)
 
     state = native_client(monkeypatch, httpx2, handler)
-    if method == 'complete':
-        assert GeminiProvider('dummy-key').complete('system', 'user', options=OPTIONS).text == 'first'
-    else:
-        emitted = list(GeminiProvider('dummy-key').stream('system', 'user'))
-        assert [item for item in emitted if isinstance(item, str)] == ['first']
+    with pytest.raises(ProviderError) as caught:
+        if method == 'complete':
+            GeminiProvider('dummy-key').complete('system', 'user', options=OPTIONS)
+        else:
+            list(GeminiProvider('dummy-key').stream('system', 'user'))
+    assert caught.value.code == 'generation_failed'
     assert len(state.requests) == 1
+    assert state.closes == state.clients
+    assert all(response.is_closed for response in state.responses)
 
 
 @pytest.mark.parametrize('library', [httpx2, httpx], ids=['httpx2', 'httpx'])
@@ -342,7 +350,7 @@ def test_failed_stream_is_released_before_sleep_and_recovery(monkeypatch, librar
         sleeps.append(wait)
 
     monkeypatch.setattr('generation.providers.gemini.time.sleep', sleep)
-    assert list(GeminiProvider('dummy-key').stream('system', 'user')) == ['result', UsageInfo('gemini-2.5-flash', 10, 5)]
+    assert list(GeminiProvider('dummy-key').stream('system', 'user')) == ['result', UsageInfo('gemini-3.5-flash-lite', 10, 5)]
     assert len(state.requests) == 2
     assert sleeps == [1]
     assert state.closes == state.clients
@@ -359,7 +367,7 @@ def test_iterator_close_failure_does_not_mask_stream_result_or_error(monkeypatch
             list(GeminiProvider('dummy-key').stream('system', 'user'))
         assert caught.value.code == 'provider_timeout'
     else:
-        assert list(GeminiProvider('dummy-key').stream('system', 'user')) == ['result', UsageInfo('gemini-2.5-flash', 10, 5)]
+        assert list(GeminiProvider('dummy-key').stream('system', 'user')) == ['result', UsageInfo('gemini-3.5-flash-lite', 10, 5)]
     assert state.closes == state.clients
     assert all(response.is_closed for response in state.responses)
     assert MARKER not in caplog.text

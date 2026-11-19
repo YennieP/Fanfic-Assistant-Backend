@@ -120,7 +120,7 @@ def test_get_reports_saved_state_without_calling_provider(
     info = response.data['providers']['gemini']
     assert info == {
         'has_key': True,
-        'model': 'gemini-2.5-flash',
+        'model': 'gemini-3.5-flash-lite',
         'enabled': True,
         'disabled_reason': None,
         'capabilities': {'video': True, 'embedding': True},

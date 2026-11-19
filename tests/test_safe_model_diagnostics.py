@@ -101,9 +101,10 @@ def test_gemini_capacity_does_not_echo_untrusted_finish(monkeypatch):
         candidates=[SimpleNamespace(finish_reason=SimpleNamespace(value=KEY))])
     monkeypatch.setattr('generation.providers.gemini_client.genai.Client',lambda **kwargs:SimpleNamespace(models=SimpleNamespace(generate_content=lambda **args:response)))
     with capture_logger('generation.providers.gemini') as sink:
-        result=GeminiProvider(KEY).complete(PROMPT,'synthetic',options=CompletionOptions(response_format='text',max_tokens=64))
+        with pytest.raises(ProviderError) as caught:
+            GeminiProvider(KEY).complete(PROMPT,'synthetic',options=CompletionOptions(response_format='text',max_tokens=64))
     logged=sink.getvalue()
-    assert result.text==OUTPUT and result.finish_reason==KEY
+    assert caught.value.code=='generation_failed' and KEY not in str(caught.value)
     assert OUTPUT not in logged and PROMPT not in logged and KEY not in logged
     assert 'finish_reason=UNKNOWN' in logged
     assert 'prompt_tokens=10 completion_tokens=5 total_tokens=22 unattributed_tokens=7 max_output_tokens=64' in logged

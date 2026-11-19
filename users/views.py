@@ -78,13 +78,22 @@ def _record_verification(
     key.verification_status = verification_status
     key.verification_checked_at = timezone.now()
     key.verification_model = definition.model if definition else None
-    key.verification_resolved_model = result.model if result else None
+    key.verification_resolved_model = _verification_resolved_model(provider, result)
     key.save(update_fields=[
         'verification_status',
         'verification_checked_at',
         'verification_model',
         'verification_resolved_model',
     ])
+
+
+def _verification_resolved_model(provider, result):
+    if result is None:
+        return None
+    if provider == 'gemini':
+        metadata = getattr(result, 'metadata', None)
+        return metadata.model_version if metadata is not None else None
+    return result.model
 
 
 def _verify_saved_key(key: UserProviderKey, provider: str) -> CompleteResult:
@@ -160,7 +169,7 @@ class LLMConfigView(APIView):
                     'verification_status': 'valid',
                     'verification_checked_at': timezone.now(),
                     'verification_model': definition.model,
-                    'verification_resolved_model': result.model,
+                    'verification_resolved_model': _verification_resolved_model(provider, result),
                 },
             )
 
